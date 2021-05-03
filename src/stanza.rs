@@ -31,6 +31,10 @@ impl Stanza {
 		self.root.borrow()
 	}
 
+	pub fn root_ptr(&self) -> tree::ElementPtr {
+		self.root.clone()
+	}
+
 	pub fn tag(&mut self, name: String, attr: Option<HashMap<String, String>>) -> Option<tree::ElementPtr> {
 		let parent_ptr = self.cursor.deref_on(self.root.clone())?;
 		let mut parent = parent_ptr.borrow_mut();
