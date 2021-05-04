@@ -75,7 +75,7 @@ impl LuaChildElementViewHandle {
 impl LuaUserData for LuaChildElementViewHandle {
 	fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
 		methods.add_meta_method(LuaMetaMethod::Len, |_, this, _: ()| -> LuaResult<usize> {
-			Ok(this.0.borrow().children.element_view().len())
+			Ok(this.0.borrow().element_view().len())
 		});
 
 		methods.add_meta_method(LuaMetaMethod::Index, |lua, this, index: i64| -> LuaResult<LuaValue> {
@@ -85,15 +85,37 @@ impl LuaUserData for LuaChildElementViewHandle {
 
 			let el = this.0.borrow();
 			let rust_index = index as usize - 1;
-			let el_index = match el.children.element_view().get_index(rust_index) {
+			let el_index = match el.element_view().get_index(rust_index) {
 				Some(i) => i,
 				None => return Ok(LuaValue::Nil),
 			};
-			let node = el.children.get(el_index);
+			let node = el.get(el_index);
 			match node {
 				Some(tree::Node::Element(el)) => LuaStanza::wrap(stanza::Stanza::wrap(el.clone())).to_lua(lua),
 				_ => Err(LuaError::RuntimeError("internal stanza state corruption: index does not refer to element".to_string()))
 			}
+		});
+
+		methods.add_meta_method_mut(LuaMetaMethod::NewIndex, |_, this, (index, st): (i64, LuaStanza)| -> LuaResult<LuaValue> {
+			if index < 1 {
+				return Ok(LuaValue::Nil);
+			}
+
+			let mut el = this.0.borrow_mut();
+			let rust_index = index as usize - 1;
+			let el_view = el.element_view();
+			if el_view.len() == rust_index {
+				// quirky append, TODO
+				return Err(LuaError::RuntimeError("append not implemented yet".to_string()));
+			} else {
+				// TODO: validate that this is cycle-free
+				let el_index = match el_view.get_index(rust_index) {
+					None => return Ok(LuaValue::Nil),
+					Some(i) => i,
+				};
+				el[el_index] = tree::Node::Element(st.0.borrow().root_ptr().clone());
+			}
+			Ok(LuaValue::Nil)
 		});
 	}
 }
@@ -125,7 +147,7 @@ impl LuaUserData for LuaStanza {
 						return Ok(LuaValue::Nil);
 					}
 					let real_index = i as usize - 1;
-					match this.0.borrow().root().children.get(real_index) {
+					match this.0.borrow().root().get(real_index) {
 						Some(node) => node.clone().to_lua(lua),
 						None => Ok(LuaValue::Nil),
 					}
@@ -140,7 +162,7 @@ impl LuaUserData for LuaStanza {
 		});
 
 		methods.add_meta_method(LuaMetaMethod::Len, |_, this, _: ()| -> LuaResult<usize> {
-			Ok(this.0.borrow().root().children.len())
+			Ok(this.0.borrow().root().len())
 		});
 
 		methods.add_method("text", |_, this, data: LuaValue| -> LuaResult<LuaStanza> {
@@ -186,6 +208,30 @@ impl LuaUserData for LuaStanza {
 					Ok(this.clone())
 				},
 				None => Err(LuaError::RuntimeError("invalid cursor in stanza".to_string())),
+			}
+		});
+
+		methods.add_method("reset", |_, this, _: ()| -> LuaResult<LuaStanza> {
+			this.0.borrow_mut().reset();
+			Ok(this.clone())
+		});
+
+		methods.add_method("maptags", |_, this, cb: LuaFunction| -> LuaResult<LuaStanza> {
+			let st = this.0.borrow();
+			let root_ptr = st.root_ptr();
+			let mut el = root_ptr.borrow_mut();
+			let result = el.map_elements(|el| {
+				let st = LuaStanza::wrap(stanza::Stanza::wrap(el));
+				match cb.call::<_, Option<LuaStanza>>(st) {
+					Err(e) => Err(e),
+					Ok(None) => Ok(None),
+					Ok(Some(st)) => Ok(Some(st.0.borrow().root_ptr().clone())),
+				}
+			});
+			match result {
+				Some(tree::MapElementsError::External(e)) => Err(e),
+				Some(tree::MapElementsError::Structural(e)) => Err(LuaError::RuntimeError(format!("structural error during maptags: {}", e))),
+				None => Ok(this.clone()),
 			}
 		});
 	}
@@ -345,4 +391,8 @@ pub fn stanza_test<'l>(lua: &'l Lua, st: LuaValue) -> LuaResult<bool> {
 		Ok(_) => true,
 		Err(_) => false,
 	})
+}
+
+pub fn stanza_clone<'l>(lua: &'l Lua, st: LuaValue) -> LuaResult<LuaStanza> {
+	Ok(LuaStanza::wrap(checked_stanza(lua, st)?.0.borrow().deep_clone()))
 }

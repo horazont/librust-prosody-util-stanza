@@ -4,6 +4,24 @@ use std::collections::HashMap;
 use std::cell::{RefCell, Ref, RefMut};
 use std::ops::{Deref, DerefMut};
 
+#[derive(PartialEq, Debug)]
+pub enum InsertError {
+	LoopDetected,
+}
+
+impl fmt::Display for InsertError {
+	fn fmt<'a>(&self, f: &'a mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::LoopDetected => write!(f, "loop detected"),
+		}
+	}
+}
+
+pub enum MapElementsError<T> {
+	Structural(InsertError),
+	External(T),
+}
+
 #[derive(Clone)]
 pub struct ElementPtr(Rc<RefCell<Element>>);
 
@@ -22,6 +40,10 @@ impl ElementPtr {
 
 	pub fn ptr_eq(this: &Self, other: &Self) -> bool {
 		Rc::ptr_eq(&this.0, &other.0)
+	}
+
+	pub fn deep_clone(&self) -> ElementPtr {
+		ElementPtr::wrap(self.borrow().deep_clone())
 	}
 }
 
@@ -52,7 +74,12 @@ pub struct ElementView<'a> {
 pub struct Element {
 	pub localname: String,
 	pub attr: HashMap<String, String>,
-	pub children: Children,
+	children: Children,
+
+	/// This is set to true if and only if the element has no parent, nowhere.
+	/// By default, this is set to true.
+	/// It is set to false by Children::push.
+	is_root: bool,
 }
 
 impl Node {
@@ -79,6 +106,13 @@ impl Node {
 			None
 		}
 	}
+
+	pub fn deep_clone(&self) -> Node {
+		match self {
+			Node::Text(s) => Node::Text(s.clone()),
+			Node::Element(el) => Node::Element(el.deep_clone()),
+		}
+	}
 }
 
 impl fmt::Debug for Node {
@@ -98,12 +132,26 @@ impl Children {
 		}
 	}
 
-	pub fn push(&mut self, n: Node) {
-		let is_element = n.as_element_ptr().is_some();
+	fn push_element(&mut self, el: ElementPtr) -> Option<InsertError> {
+		{
+			let mut el = el.borrow_mut();
+			el.is_root = false;
+		}
 		let index = self.all.len();
+		self.all.push(Node::Element(el));
+		self.element_indices.push(index);
+		None
+	}
+
+	fn push_other(&mut self, n: Node) -> Option<InsertError> {
 		self.all.push(n);
-		if is_element {
-			self.element_indices.push(index);
+		None
+	}
+
+	pub fn push(&mut self, n: Node) -> Option<InsertError> {
+		match n {
+			Node::Element(el) => self.push_element(el),
+			_ => self.push_other(n),
 		}
 	}
 
@@ -164,6 +212,7 @@ impl Element {
 				None => HashMap::new(),
 			},
 			children: Children::new(),
+			is_root: true,
 		}
 	}
 
@@ -178,6 +227,89 @@ impl Element {
 		let new_child = Node::wrap_text(text);
 		self.children.push(new_child);
 	}
+
+	pub fn deep_clone(&self) -> Element {
+		let mut result = Element::new_with_attr(
+			self.localname.clone(),
+			Some(self.attr.clone()),
+		);
+		for child_node in &self.children.all {
+			result.children.push(child_node.deep_clone());
+		}
+		result
+	}
+
+	fn may_insert<'a>(&self, el: &'a ElementPtr) -> bool {
+		if std::ptr::eq(el.as_ptr(), self as *const Element) {
+			return false;
+		}
+		if !el.borrow().is_root {
+			return false;
+		}
+		true
+	}
+
+	pub fn map_elements<F, T>(&mut self, f: F) -> Option<MapElementsError<T>>
+		where F: Fn(ElementPtr) -> Result<Option<ElementPtr>, T>
+	{
+		let mut new_children = Children::new();
+		for node in &self.children.all {
+			match node {
+				Node::Text(_) => new_children.push(node.clone()),
+				Node::Element(el) => {
+					match f(el.clone()) {
+						Err(e) => return Some(MapElementsError::External(e)),
+						Ok(None) => continue,
+						Ok(Some(new_el)) => {
+							// we need to do the usual loop-detection dance
+							// here
+							// Note: if the ptr is equal, we can re-insert
+							// here no matter what any other check says.
+							if !ElementPtr::ptr_eq(&new_el, &el) && !self.may_insert(&new_el) {
+								return Some(MapElementsError::Structural(InsertError::LoopDetected));
+							}
+							new_children.push(Node::Element(new_el))
+						}
+					}
+				}
+			};
+		}
+		self.children = new_children;
+		None
+	}
+
+	pub fn is_root(&self) -> bool {
+		self.is_root
+	}
+
+	pub fn element_view(&self) -> ElementView {
+		self.children.element_view()
+	}
+
+	pub fn push(&mut self, n: Node) -> Option<InsertError> {
+		if let Node::Element(el) = &n {
+			if !self.may_insert(&el) {
+				return Some(InsertError::LoopDetected);
+			}
+		}
+		self.children.push(n)
+	}
+}
+
+// gives us all the goodies rust slices have, including stuff like len(),
+// is_empty() etc.
+impl Deref for Element {
+	type Target = [Node];
+
+	fn deref(&self) -> &[Node] {
+		&self.children
+	}
+}
+
+impl DerefMut for Element {
+	fn deref_mut(&mut self) -> &mut [Node] {
+		&mut self.children
+	}
 }
 
 impl fmt::Debug for Element {
@@ -189,6 +321,13 @@ impl fmt::Debug for Element {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	fn prep_message() -> ElementPtr {
+		let mut msg = Element::new("message".to_string());
+		msg.tag("body".to_string(), None).borrow_mut().text("Hello World!".to_string());
+		msg.tag("delay".to_string(), None);
+		ElementPtr::wrap(msg)
+	}
 
 	#[test]
 	fn node_as_text_on_text() {
@@ -227,6 +366,17 @@ mod tests {
 		assert!(!c.is_empty());
 
 		assert_eq!(c[0].as_element_ptr().unwrap().borrow().localname, "el");
+	}
+
+	#[test]
+	fn children_push_element_clears_root_bit() {
+		let mut c = Children::new();
+		c.push(Node::wrap_element(Element::new("el".to_string())));
+
+		assert!(c.len() == 1);
+		assert!(!c.is_empty());
+
+		assert!(!c[0].as_element_ptr().unwrap().borrow().is_root());
 	}
 
 	#[test]
@@ -284,6 +434,69 @@ mod tests {
 		assert_eq!(el.children.len(), 1);
 		assert_eq!(el.children.element_view().len(), 1);
 		assert_eq!(el.children[0].as_element_ptr().unwrap().borrow().localname, "body");
+	}
+
+	#[test]
+	fn element_push_does_not_allow_cycles() {
+		let mut el = Element::new("message".to_string());
+		el.tag("foo".to_string(), None);
+		assert_eq!(el.push(el[0].clone()), Some(InsertError::LoopDetected));
+		assert_eq!(el.len(), 1);
+	}
+
+	#[test]
+	fn element_push_does_not_allow_self_insertion() {
+		let el_ptr = ElementPtr::wrap(Element::new("message".to_string()));
+		let n = Node::Element(el_ptr.clone());
+		assert_eq!(el_ptr.borrow_mut().push(n), Some(InsertError::LoopDetected));
+		assert_eq!(el_ptr.borrow().len(), 0);
+	}
+
+	#[test]
+	fn element_push_allows_adding_freestanding_element() {
+		let mut msg = Element::new("message".to_string());
+		let body = ElementPtr::wrap(Element::new("message".to_string()));
+		body.borrow_mut().text("foobar".to_string());
+		msg.push(Node::Element(body.clone()));
+		assert_eq!(msg.len(), 1);
+		assert!(ElementPtr::ptr_eq(&body, &msg[0].as_element_ptr().unwrap()));
+	}
+
+	#[test]
+	fn element_map_elements_allows_identity_transform() {
+		let el_ptr = prep_message();
+		assert_eq!(el_ptr.borrow().len(), 2);
+		let map_result = el_ptr.borrow_mut().map_elements::<_, ()>(|el| {
+			Ok(Some(el))
+		});
+		assert!(map_result.is_none());
+		assert_eq!(el_ptr.borrow().len(), 2);
+	}
+
+	#[test]
+	fn element_map_elements_rejects_self_insertion() {
+		let el_ptr = prep_message();
+		assert_eq!(el_ptr.borrow().len(), 2);
+		let map_result = el_ptr.borrow_mut().map_elements::<_, ()>(|_| {
+			Ok(Some(el_ptr.clone()))
+		});
+		assert!(match map_result {
+			Some(MapElementsError::Structural(InsertError::LoopDetected)) => true,
+			_ => false,
+		})
+	}
+
+	#[test]
+	fn element_map_elements_rejects_insertion_of_parent_at_child() {
+		let el_ptr = prep_message();
+		assert_eq!(el_ptr.borrow().len(), 2);
+		let map_result = el_ptr.borrow_mut().map_elements::<_, ()>(|_| {
+			Ok(Some(el_ptr.clone()))
+		});
+		assert!(match map_result {
+			Some(MapElementsError::Structural(InsertError::LoopDetected)) => true,
+			_ => false,
+		})
 	}
 
 	#[test]

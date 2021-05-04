@@ -18,6 +18,7 @@ fn util_stanza(lua: &Lua) -> LuaResult<LuaTable> {
 	exports.set("reply", lua.create_function(lua::stanza_reply)?)?;
 	exports.set("error_reply", lua.create_function(lua::stanza_error_reply)?)?;
 	exports.set("is_stanza", lua.create_function(lua::stanza_test)?)?;
+	exports.set("clone", lua.create_function(lua::stanza_clone)?)?;
 
 	Ok(exports)
 }

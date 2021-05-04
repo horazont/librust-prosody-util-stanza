@@ -38,7 +38,7 @@ impl Stanza {
 	pub fn tag(&mut self, name: String, attr: Option<HashMap<String, String>>) -> Option<tree::ElementPtr> {
 		let parent_ptr = self.cursor.deref_on(self.root.clone())?;
 		let mut parent = parent_ptr.borrow_mut();
-		let new_index = parent.children.len();
+		let new_index = parent.len();
 		self.cursor.down(new_index);
 		Some(parent.tag(name, attr))
 	}
@@ -55,6 +55,14 @@ impl Stanza {
 
 	pub fn up(&mut self) {
 		self.cursor.up();
+	}
+
+	pub fn reset(&mut self) {
+		self.cursor.reset();
+	}
+
+	pub fn deep_clone(&self) -> Stanza {
+		Stanza::wrap(self.root.deep_clone())
 	}
 }
 
@@ -98,9 +106,9 @@ mod tests {
 		let mut st = Stanza::new("iq".to_string(), None);
 		st.tag("query".to_string(), None);
 		st.tag("item".to_string(), None);
-		assert_eq!(st.root().children.len(), 1);
-		assert_eq!(st.root().children[0].as_element_ptr().unwrap().borrow().children.len(), 1);
-		assert_eq!(st.root().children[0].as_element_ptr().unwrap().borrow().children[0].as_element_ptr().unwrap().borrow().children.len(), 0);
+		assert_eq!(st.root().len(), 1);
+		assert_eq!(st.root()[0].as_element_ptr().unwrap().borrow().len(), 1);
+		assert_eq!(st.root()[0].as_element_ptr().unwrap().borrow()[0].as_element_ptr().unwrap().borrow().len(), 0);
 	}
 
 	#[test]
@@ -113,5 +121,16 @@ mod tests {
 		assert!(root_derefd.is_some());
 		let root_derefd = root_derefd.unwrap();
 		assert!(tree::ElementPtr::ptr_eq(&st.root, &root_derefd));
+	}
+
+	#[test]
+	fn stanza_reset_moves_cursor() {
+		let mut st = Stanza::new("iq".to_string(), None);
+		st.tag("query".to_string(), None);
+		st.tag("extra".to_string(), None);
+		st.reset();
+		st.tag("error".to_string(), None);
+
+		assert_eq!(st.root().len(), 2);
 	}
 }

@@ -12,7 +12,7 @@ impl ElementPath {
 		let mut curr = root;
 		for idx in self.0.iter() {
 			let idx = *idx;
-			curr = curr.clone().borrow().children.get(idx)?.as_element_ptr()?.clone()
+			curr = curr.clone().borrow().get(idx)?.as_element_ptr()?.clone()
 		}
 		Some(curr)
 	}
@@ -26,6 +26,10 @@ impl ElementPath {
 			return;
 		}
 		self.0.pop();
+	}
+
+	pub fn reset(&mut self) {
+		self.0.clear();
 	}
 }
 
