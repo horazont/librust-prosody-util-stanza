@@ -1,5 +1,5 @@
-use bstr::BStr;
 use std::fmt;
+use std::borrow::Cow;
 
 #[derive(PartialEq, Debug)]
 pub enum TextConstraintError {
@@ -21,7 +21,7 @@ impl fmt::Display for TextConstraintError {
 	}
 }
 
-pub fn convert_xml_element_name(raw: &BStr) -> Result<String, TextConstraintError> {
+pub fn convert_xml_element_name(raw: Cow<'_, [u8]>) -> Result<String, TextConstraintError> {
 	let s = match String::from_utf8(raw.to_vec()) {
 		Ok(s) => s,
 		Err(_) => return Err(TextConstraintError::InvalidUtf8),
@@ -32,7 +32,7 @@ pub fn convert_xml_element_name(raw: &BStr) -> Result<String, TextConstraintErro
 	}
 }
 
-pub fn convert_xml_attribute_name(raw: &BStr) -> Result<String, TextConstraintError> {
+pub fn convert_xml_attribute_name(raw: Cow<'_, [u8]>) -> Result<String, TextConstraintError> {
 	let s = match String::from_utf8(raw.to_vec()) {
 		Ok(s) => s,
 		Err(_) => return Err(TextConstraintError::InvalidUtf8),
@@ -43,7 +43,7 @@ pub fn convert_xml_attribute_name(raw: &BStr) -> Result<String, TextConstraintEr
 	}
 }
 
-pub fn convert_xml_cdata(raw: &BStr) -> Result<String, TextConstraintError> {
+pub fn convert_xml_cdata(raw: Cow<'_, [u8]>) -> Result<String, TextConstraintError> {
 	let s = match String::from_utf8(raw.to_vec()) {
 		Ok(s) => s,
 		Err(_) => return Err(TextConstraintError::InvalidUtf8),

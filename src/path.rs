@@ -1,6 +1,6 @@
 use crate::tree;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ElementPath(Vec<usize>);
 
 impl ElementPath {
@@ -31,6 +31,10 @@ impl ElementPath {
 	pub fn reset(&mut self) {
 		self.0.clear();
 	}
+
+	pub fn depth(&self) -> usize {
+		self.0.len()
+	}
 }
 
 #[cfg(test)]
@@ -40,7 +44,7 @@ mod tests {
 	#[test]
 	fn element_path_new_derefs_to_root() {
 		let p = ElementPath::new();
-		let root = tree::ElementPtr::wrap(tree::Element::new("root".to_string()));
+		let root = tree::ElementPtr::new("root".to_string());
 		let root_ref = p.deref_on(root.clone());
 		assert_eq!(root.borrow().localname, root_ref.unwrap().borrow().localname);
 	}
@@ -48,7 +52,7 @@ mod tests {
 	#[test]
 	fn element_path_down_to_ref_to_children() {
 		let mut p = ElementPath::new();
-		let root = tree::ElementPtr::wrap(tree::Element::new("root".to_string()));
+		let root = tree::ElementPtr::new("root".to_string());
 		{
 			let mut root_el = root.borrow_mut();
 			root_el.tag("body".to_string(), None).borrow_mut().text("foobar".to_string());
@@ -62,7 +66,7 @@ mod tests {
 	#[test]
 	fn element_path_up_to_go_back() {
 		let mut p = ElementPath::new();
-		let root = tree::ElementPtr::wrap(tree::Element::new("root".to_string()));
+		let root = tree::ElementPtr::new("root".to_string());
 		{
 			let mut root_el = root.borrow_mut();
 			root_el.tag("body".to_string(), None).borrow_mut().text("foobar".to_string());
@@ -78,7 +82,7 @@ mod tests {
 	#[test]
 	fn element_path_down_to_ref_to_text_is_none() {
 		let mut p = ElementPath::new();
-		let root = tree::ElementPtr::wrap(tree::Element::new("root".to_string()));
+		let root = tree::ElementPtr::new("root".to_string());
 		{
 			let mut root_el = root.borrow_mut();
 			root_el.tag("body".to_string(), None).borrow_mut().text("foobar".to_string());

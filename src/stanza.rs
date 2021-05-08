@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::cell::Ref;
+use std::fmt;
 
 use crate::tree;
 use crate::path;
 
+#[derive(PartialEq)]
 pub struct Stanza {
 	root: tree::ElementPtr,
 	cursor: path::ElementPath,
@@ -12,7 +14,7 @@ pub struct Stanza {
 impl Stanza {
 	pub fn new(name: String, attr: Option<HashMap<String, String>>) -> Stanza {
 		Stanza::wrap(
-			tree::ElementPtr::wrap(tree::Element::new_with_attr(name, attr)),
+			tree::ElementPtr::new_with_attr(name, attr),
 		)
 	}
 
@@ -53,6 +55,10 @@ impl Stanza {
 		true
 	}
 
+	pub fn down(&mut self, index: usize) {
+		self.cursor.down(index);
+	}
+
 	pub fn up(&mut self) {
 		self.cursor.up();
 	}
@@ -63,6 +69,10 @@ impl Stanza {
 
 	pub fn deep_clone(&self) -> Stanza {
 		Stanza::wrap(self.root.deep_clone())
+	}
+
+	pub fn is_at_top(&self) -> bool {
+		self.cursor.depth() == 0
 	}
 }
 
@@ -132,5 +142,13 @@ mod tests {
 		st.tag("error".to_string(), None);
 
 		assert_eq!(st.root().len(), 2);
+	}
+}
+
+impl fmt::Debug for Stanza {
+	fn fmt<'a>(&self, f: &'a mut fmt::Formatter) -> fmt::Result {
+		f.debug_struct("Stanza")
+			.field("root", &self.root())
+			.finish()
 	}
 }
