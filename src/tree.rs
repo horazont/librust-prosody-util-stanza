@@ -4,21 +4,53 @@ use std::collections::HashMap;
 use std::cell::{RefCell, Ref, RefMut};
 use std::ops::{Deref, DerefMut};
 use std::slice::Iter;
+use std::error::Error;
 
 #[derive(PartialEq, Debug)]
 pub enum InsertError {
+	NodeHasParent,
+	NodeIsSelf,
 	LoopDetected,
+	Protected,
+}
+
+#[derive(PartialEq, Debug)]
+pub enum ProtectError {
+	NodeHasParent,
 }
 
 impl fmt::Display for InsertError {
 	fn fmt<'a>(&self, f: &'a mut fmt::Formatter) -> fmt::Result {
 		match self {
-			Self::LoopDetected => write!(f, "loop detected"),
+			Self::NodeHasParent => f.write_str("the node to insert has a parent already"),
+			Self::NodeIsSelf=> f.write_str("the node to insert is the same as the parent node"),
+			Self::LoopDetected => f.write_str("inserting the node would create a loop"),
+			Self::Protected => f.write_str("parent node is protected"),
 		}
 	}
 }
 
-#[derive(Debug)]
+impl Error for InsertError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
+
+impl fmt::Display for ProtectError {
+	fn fmt<'a>(&self, f: &'a mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::NodeHasParent => f.write_str("the node to freeze has a parent already"),
+		}
+	}
+}
+
+impl Error for ProtectError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
+
+#[derive(PartialEq, Debug)]
 pub enum MapElementsError<T> {
 	Structural(InsertError),
 	External(T),
@@ -134,6 +166,7 @@ pub struct Element {
 	pub attr: HashMap<String, String>,
 	pub namespaces: HashMap<String, String>,
 	children: Children,
+	protected: bool,
 	// using cells here because those don’t actually change anything about
 	// the logical Element ... it would otherwise require to have the elements
 	// be mutable to be inserted in a subtree.
@@ -272,6 +305,7 @@ impl Element {
 			},
 			namespaces: HashMap::new(),
 			children: Children::new(),
+			protected: false,
 			parent: RefCell::new(WeakElementPtr::new()),
 			self_ptr: RefCell::new(WeakElementPtr::new()),
 		}
@@ -284,10 +318,10 @@ impl Element {
 
 	pub fn tag<'a>(&'a mut self, name: String, attr: Option<HashMap<String, String>>) -> ElementPtr {
 		let result_ptr = ElementPtr::new_with_attr(name, attr);
+		// if this node is protected, we need to inherit that.
+		result_ptr.borrow_mut().protected = self.protected;
 		let new_node = Node::Element(result_ptr.clone());
-		self.push(new_node).and_then(|err| -> Option<()> {
-			panic!("failed to insert fresh node: {:?}", err);
-		});
+		self.push_unchecked(new_node);
 		result_ptr
 	}
 
@@ -307,25 +341,40 @@ impl Element {
 		result
 	}
 
-	fn may_insert<'a>(&self, el: &'a ElementPtr) -> bool {
-		if std::ptr::eq(el.as_ptr(), self as *const Element) {
-			return false;
-		}
-		if el.borrow().parent.borrow().is_valid() {
-			// do not allow insertion of elements which have a parent.
-			return false;
-		}
-		// finally check that the element to be inserted is not our (possibly
-		// indirect) parent
-		let mut parent_opt = self.parent();
-		while parent_opt.is_some() {
-			let parent_ptr = parent_opt.unwrap();
-			if ElementPtr::ptr_eq(&el, &parent_ptr) {
-				return false;
+	/// Search this element and all child elements for occurences of `el`.
+	///
+	/// If either `el` is found *or* an element which we cannot borrow because
+	/// it is already borrowed mutably, we have to assume that an insert cycle
+	/// is going to happen.
+	fn deep_reverse_insert_check<'a>(&self) -> Result<(), InsertError> {
+		for node in self.iter() {
+			if let Some(child) = node.as_element_ptr() {
+				let child = match child.try_borrow() {
+					Ok(child) => child,
+					Err(_) => return Err(InsertError::LoopDetected),
+				};
+				child.deep_reverse_insert_check()?;
 			}
-			parent_opt = parent_ptr.borrow().parent();
 		}
-		true
+		Ok(())
+	}
+
+	fn check_insert<'a>(&self, el: &'a ElementPtr) -> Result<(), InsertError> {
+		if std::ptr::eq(el.as_ptr(), self as *const Element) {
+			return Err(InsertError::NodeIsSelf);
+		}
+
+		if el.borrow().is_protected() {
+			// protected guarantees that all child elements are protected, too
+			// That implies that `el` is not a parent of this element,
+			// otherwise we could not be inserting here (as this element would
+			// be protected).
+			return Ok(())
+		}
+
+		// do a full subtree scan to ensure that we are not creating a loop
+		el.borrow().deep_reverse_insert_check()?;
+		Ok(())
 	}
 
 	fn parent(&self) -> Option<ElementPtr> {
@@ -339,6 +388,9 @@ impl Element {
 	pub fn map_elements<F, T>(&mut self, f: F) -> Result<(), MapElementsError<T>>
 		where F: Fn(ElementPtr) -> Result<Option<ElementPtr>, T>
 	{
+		if self.protected {
+			return Err(MapElementsError::Structural(InsertError::Protected));
+		}
 		let mut new_children = Children::new();
 		for node in &self.children.all {
 			match node {
@@ -356,8 +408,10 @@ impl Element {
 							// here
 							// Note: if the ptr is equal, we can re-insert
 							// here no matter what any other check says.
-							if !ElementPtr::ptr_eq(&new_el, &el) && !self.may_insert(&new_el) {
-								return Err(MapElementsError::Structural(InsertError::LoopDetected));
+							if !ElementPtr::ptr_eq(&new_el, &el) {
+								if let Err(e) = self.check_insert(&new_el) {
+									return Err(MapElementsError::Structural(e));
+								}
 							}
 							new_children.push(Node::Element(new_el))
 						}
@@ -377,15 +431,26 @@ impl Element {
 		self.children.element_view()
 	}
 
-	pub fn push(&mut self, n: Node) -> Option<InsertError> {
+	fn push_unchecked(&mut self, n: Node) {
 		if let Node::Element(el) = &n {
-			if !self.may_insert(&el) {
-				return Some(InsertError::LoopDetected);
+			if !el.borrow().protected {
+				// protected elements may be multi-parent, so we don't ever
+				// set the parent.
+				*el.borrow_mut().parent.borrow_mut() = self.self_ptr();
 			}
-			*el.borrow_mut().parent.borrow_mut() = self.self_ptr();
 		}
 		self.children.push(n);
-		None
+	}
+
+	pub fn push(&mut self, n: Node) -> Result<(), InsertError> {
+		if self.protected {
+			return Err(InsertError::Protected);
+		}
+		if let Node::Element(el) = &n {
+			self.check_insert(&el)?;
+		}
+		self.push_unchecked(n);
+		Ok(())
 	}
 
 	pub fn get_text(&self) -> Option<String> {
@@ -400,6 +465,31 @@ impl Element {
 			strs.push(node.as_text().unwrap().as_str());
 		}
 		Some(strs.concat())
+	}
+
+	#[inline]
+	pub fn is_protected(&self) -> bool {
+		self.protected
+	}
+
+	fn protect_rec(&mut self) -> Result<(), ProtectError> {
+		for node in self.iter() {
+			match node {
+				Node::Text(_) => (),
+				Node::Element(e) => {
+					e.borrow_mut().protect_rec()?;
+				}
+			}
+		}
+		self.protected = true;
+		Ok(())
+	}
+
+	pub fn protect(&mut self) -> Result<(), ProtectError> {
+		if self.parent().is_some() {
+			return Err(ProtectError::NodeHasParent);
+		}
+		self.protect_rec()
 	}
 }
 
@@ -561,20 +651,20 @@ mod tests {
 	}
 
 	#[test]
-	fn element_push_rejects_child_insertion() {
-		let el = ElementPtr::new("message".to_string());
-		el.borrow_mut().tag("foo".to_string(), None);
-		let el_ptr2 = el.borrow()[0].clone();
-		assert_eq!(el.borrow_mut().push(el_ptr2), Some(InsertError::LoopDetected));
-		assert_eq!(el.borrow().len(), 1);
-	}
-
-	#[test]
 	fn element_push_rejects_self_insertion() {
 		let el_ptr = ElementPtr::new("message".to_string());
 		let n = Node::Element(el_ptr.clone());
-		assert_eq!(el_ptr.borrow_mut().push(n), Some(InsertError::LoopDetected));
+		assert_eq!(el_ptr.borrow_mut().push(n), Err(InsertError::NodeIsSelf));
 		assert_eq!(el_ptr.borrow().len(), 0);
+	}
+
+	#[test]
+	fn element_push_rejects_parent_insertion() {
+		let root = prep_message();
+		let act_on = root.borrow()[1].as_element_ptr().unwrap();
+		let n = Node::Element(root.clone());
+		assert_eq!(act_on.borrow_mut().push(n), Err(InsertError::LoopDetected));
+		assert_eq!(act_on.borrow().len(), 0);
 	}
 
 	#[test]
@@ -582,7 +672,7 @@ mod tests {
 		let root = ElementPtr::new("root".to_string());
 		let child = root.borrow_mut().tag("child".to_string(), None);
 		let push_result = child.borrow_mut().push(Node::Element(root.clone()));
-		assert_eq!(push_result, Some(InsertError::LoopDetected));
+		assert_eq!(push_result, Err(InsertError::LoopDetected));
 		assert_eq!(child.borrow().len(), 0);
 	}
 
@@ -591,7 +681,43 @@ mod tests {
 		let msg = ElementPtr::new("message".to_string());
 		let body = ElementPtr::new("body".to_string());
 		body.borrow_mut().text("foobar".to_string());
-		msg.borrow_mut().push(Node::Element(body.clone()));
+		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
+		assert_eq!(msg.borrow().len(), 1);
+		assert!(ElementPtr::ptr_eq(&body, &msg.borrow()[0].as_element_ptr().unwrap()));
+	}
+
+	#[test]
+	fn element_push_sets_parent() {
+		let msg = ElementPtr::new("message".to_string());
+		let body = ElementPtr::new("body".to_string());
+		body.borrow_mut().text("foobar".to_string());
+		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
+		assert!(ElementPtr::ptr_eq(&body.borrow().parent().unwrap(), &msg));
+	}
+
+	#[test]
+	fn element_tag_sets_parent() {
+		let msg = ElementPtr::new("message".to_string());
+		let body = msg.borrow_mut().tag("body".to_string(), None);
+		assert!(ElementPtr::ptr_eq(&body.borrow().parent().unwrap(), &msg));
+	}
+
+	#[test]
+	fn element_push_does_not_set_parent_of_protected_element() {
+		let msg = ElementPtr::new("message".to_string());
+		let body = ElementPtr::new("body".to_string());
+		body.borrow_mut().text("foobar".to_string());
+		body.borrow_mut().protect().unwrap();
+		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
+		assert!(body.borrow().parent().is_none());
+	}
+
+	#[test]
+	fn element_push_allows_adding_child_element_of_unrelated_tree() {
+		let msg = ElementPtr::new("message".to_string());
+		let body = ElementPtr::new("body".to_string());
+		body.borrow_mut().text("foobar".to_string());
+		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
 		assert_eq!(msg.borrow().len(), 1);
 		assert!(ElementPtr::ptr_eq(&body, &msg.borrow()[0].as_element_ptr().unwrap()));
 	}
@@ -613,23 +739,22 @@ mod tests {
 		let map_result = el_ptr.borrow_mut().map_elements::<_, ()>(|_| {
 			Ok(Some(el_ptr.clone()))
 		});
-		assert!(match map_result {
-			Err(MapElementsError::Structural(InsertError::LoopDetected)) => true,
-			_ => false,
-		})
+		assert_eq!(map_result, Err::<(), _>(MapElementsError::<()>::Structural(InsertError::NodeIsSelf)));
 	}
 
 	#[test]
 	fn element_map_elements_rejects_insertion_of_parent_at_child() {
-		let el_ptr = prep_message();
-		assert_eq!(el_ptr.borrow().len(), 2);
-		let map_result = el_ptr.borrow_mut().map_elements::<_, ()>(|_| {
-			Ok(Some(el_ptr.clone()))
+		let root = prep_message();
+		let act_on = root.borrow()[1].as_element_ptr().unwrap();
+		act_on.borrow_mut().tag("dummy".to_string(), None);
+		assert_eq!(root.borrow().len(), 2);
+		assert_eq!(act_on.borrow().len(), 1);
+		let map_result = act_on.borrow_mut().map_elements::<_, ()>(|_| {
+			Ok(Some(root.clone()))
 		});
-		assert!(match map_result {
-			Err(MapElementsError::Structural(InsertError::LoopDetected)) => true,
-			_ => false,
-		})
+		assert_eq!(map_result, Err::<(), _>(MapElementsError::<()>::Structural(InsertError::LoopDetected)));
+		assert_eq!(root.borrow().len(), 2);
+		assert_eq!(act_on.borrow().len(), 1);
 	}
 
 	#[test]
@@ -663,7 +788,7 @@ mod tests {
 			Ok(None)
 		}).unwrap();
 		assert_eq!(el_ptr.borrow().len(), 0);
-		assert!(el_ptr.borrow_mut().push(Node::Element(child_ptr)).is_none());
+		assert!(el_ptr.borrow_mut().push(Node::Element(child_ptr)).is_ok());
 	}
 
 	#[test]
@@ -675,5 +800,98 @@ mod tests {
 		assert_eq!(body.children.len(), 1);
 		assert_eq!(body.children.element_view().len(), 0);
 		assert_eq!(body.children[0].as_text().unwrap(), "Hello World!");
+	}
+
+	#[test]
+	fn element_protect_is_recursive() {
+		let el = ElementPtr::new("message".to_string());
+		el.borrow_mut().tag("body".to_string(), None);
+		assert!(!el.borrow().is_protected());
+		assert!(!el.borrow()[0].as_element_ptr().unwrap().borrow().is_protected());
+		el.borrow_mut().protect().unwrap();
+		assert!(el.borrow().is_protected());
+		assert!(el.borrow()[0].as_element_ptr().unwrap().borrow().is_protected());
+	}
+
+	#[test]
+	fn element_protect_prohibits_push() {
+		let el = ElementPtr::new("message".to_string());
+		el.borrow_mut().tag("body".to_string(), None);
+		el.borrow_mut().protect().unwrap();
+		let new_node = Node::Element(ElementPtr::new("delay".to_string()));
+		assert_eq!(el.borrow().len(), 1);
+		assert_eq!(el.borrow_mut().push(new_node), Err(InsertError::Protected));
+		assert_eq!(el.borrow().len(), 1);
+	}
+
+	#[test]
+	fn element_protect_prohibits_map_elements() {
+		let el = ElementPtr::new("message".to_string());
+		el.borrow_mut().tag("body".to_string(), None);
+		el.borrow_mut().protect().unwrap();
+		assert_eq!(el.borrow_mut().map_elements::<_, ()>(|_| {
+			Ok(None)
+		}), Err(MapElementsError::Structural(InsertError::Protected)));
+		assert_eq!(el.borrow().len(), 1);
+	}
+
+	#[test]
+	fn element_protect_allows_tag_and_protects_it() {
+		let el = ElementPtr::new("message".to_string());
+		el.borrow_mut().protect().unwrap();
+		el.borrow_mut().tag("body".to_string(), None);
+		assert_eq!(el.borrow().len(), 1);
+		assert!(el.borrow()[0].as_element_ptr().unwrap().borrow().is_protected());
+	}
+
+	#[test]
+	fn element_protect_allows_text() {
+		let el = ElementPtr::new("message".to_string());
+		el.borrow_mut().protect().unwrap();
+		el.borrow_mut().text("foobar2342".to_string());
+		assert_eq!(el.borrow().len(), 1);
+	}
+
+	#[test]
+	fn element_unprotected_elements_can_be_inserted_into_separate_trees() {
+		let p1 = ElementPtr::new("message".to_string());
+		let p2 = ElementPtr::new("message".to_string());
+		let sig = ElementPtr::new("signature".to_string());
+
+		p1.borrow_mut().push(Node::Element(sig.clone())).unwrap();
+		p2.borrow_mut().push(Node::Element(sig.clone())).unwrap();
+
+		assert_eq!(p1.borrow().len(), 1);
+		assert_eq!(p2.borrow().len(), 1);
+		assert!(ElementPtr::ptr_eq(
+			&p1.borrow()[0].as_element_ptr().unwrap(),
+			&p2.borrow()[0].as_element_ptr().unwrap(),
+		));
+		assert!(ElementPtr::ptr_eq(
+			&p1.borrow()[0].as_element_ptr().unwrap(),
+			&sig,
+		));
+	}
+
+	#[test]
+	fn element_protected_elements_can_be_inserted_into_separate_trees() {
+		let p1 = ElementPtr::new("message".to_string());
+		let p2 = ElementPtr::new("message".to_string());
+		let sig = ElementPtr::new("signature".to_string());
+		sig.borrow_mut().protect().unwrap();
+
+		p1.borrow_mut().push(Node::Element(sig.clone())).unwrap();
+		p2.borrow_mut().push(Node::Element(sig.clone())).unwrap();
+
+		assert_eq!(p1.borrow().len(), 1);
+		assert_eq!(p2.borrow().len(), 1);
+		assert!(ElementPtr::ptr_eq(
+			&p1.borrow()[0].as_element_ptr().unwrap(),
+			&p2.borrow()[0].as_element_ptr().unwrap(),
+		));
+		assert!(ElementPtr::ptr_eq(
+			&p1.borrow()[0].as_element_ptr().unwrap(),
+			&sig,
+		));
 	}
 }

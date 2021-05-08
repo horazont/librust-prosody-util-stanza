@@ -117,6 +117,28 @@ impl LuaChildElementViewHandle {
 	pub fn wrap(el: tree::ElementPtr) -> LuaChildElementViewHandle {
 		LuaChildElementViewHandle(el)
 	}
+
+	fn pairs<'l>(&self, lua: &'l Lua) -> LuaResult<(LuaValue<'l>, LuaChildTagsIteratorState)> {
+		let root_ptr = &self.0;
+		let iterator = LuaChildTagsIteratorState::wrap(root_ptr.clone());
+		Ok((lua.create_function(|_, state: LuaChildTagsIteratorState| -> LuaResult<(Option<usize>, Option<LuaStanza>)> {
+			let mut state = state.borrow_mut();
+			let child_opt = {
+				let parent = state.el.borrow();
+				let el_view = parent.element_view();
+				el_view.get(state.next_index)
+			};
+			match child_opt {
+				Some(child_ptr) => {
+					state.next_index += 1;
+					// returning index + 1 in accordance with how lua
+					// behaves
+					Ok((Some(state.next_index), Some(LuaStanza::wrap(stanza::Stanza::wrap(child_ptr.clone())))))
+				},
+				None => Ok((None, None)),
+			}
+		})?.to_lua(lua)?, iterator))
+	}
 }
 
 impl LuaUserData for LuaChildElementViewHandle {
@@ -143,26 +165,13 @@ impl LuaUserData for LuaChildElementViewHandle {
 			}
 		});
 
+		methods.add_meta_method(LuaMetaMethod::Pairs, |lua, this, _: ()| -> LuaResult<(LuaValue, LuaChildTagsIteratorState)> {
+			this.pairs(lua)
+		});
+
+		#[cfg(any(feature = "lua52", feature = "lua53"))]
 		methods.add_meta_method(LuaMetaMethod::Custom("__ipairs".to_string()), |lua, this, _: ()| -> LuaResult<(LuaValue, LuaChildTagsIteratorState)> {
-			let root_ptr = &this.0;
-			let iterator = LuaChildTagsIteratorState::wrap(root_ptr.clone());
-			Ok((lua.create_function(|_, state: LuaChildTagsIteratorState| -> LuaResult<(Option<usize>, Option<LuaStanza>)> {
-				let mut state = state.borrow_mut();
-				let child_opt = {
-					let parent = state.el.borrow();
-					let el_view = parent.element_view();
-					el_view.get(state.next_index)
-				};
-				match child_opt {
-					Some(child_ptr) => {
-						state.next_index += 1;
-						// returning index + 1 in accordance with how lua
-						// behaves
-						Ok((Some(state.next_index), Some(LuaStanza::wrap(stanza::Stanza::wrap(child_ptr.clone())))))
-					},
-					None => Ok((None, None)),
-				}
-			})?.to_lua(lua)?, iterator))
+			this.pairs(lua)
 		});
 
 		methods.add_meta_method_mut(LuaMetaMethod::NewIndex, |_, this, (index, st): (i64, LuaStanza)| -> LuaResult<LuaValue> {
@@ -494,15 +503,21 @@ impl LuaUserData for LuaStanza {
 				Some(p) => p,
 				None => return Err(LuaError::RuntimeError(format!("stanza position points at invalid element"))),
 			};
-			target_ptr.borrow_mut().push(child);
-			Ok(this.clone())
+			let mut target = target_ptr.borrow_mut();
+			match target.push(child) {
+				Err(e) => Err(LuaError::external(e)),
+				Ok(_) => Ok(this.clone()),
+			}
 		});
 
-		methods.add_method("add_direct_child", |_, this, child: tree::Node| -> LuaResult<LuaValue> {
+		methods.add_method("add_direct_child", |_, this, child: tree::Node| -> LuaResult<()> {
 			let st = this.0.borrow();
-			let root_ptr = st.root_ptr();
-			root_ptr.borrow_mut().push(child);
-			Ok(LuaValue::Nil)
+			let root = st.root_ptr();
+			let mut root = root.borrow_mut();
+			match root.push(child) {
+				Err(e) => Err(LuaError::external(e)),
+				Ok(_) => Ok(())
+			}
 		});
 
 		methods.add_method("find", |lua, this, path: String| -> LuaResult<LuaValue> {
@@ -534,6 +549,15 @@ impl LuaUserData for LuaStanza {
 			match formatter.format(root) {
 				Ok(s) => Ok(s),
 				Err(e) => Err(LuaError::RuntimeError(format!("failed to indent stanza: {}", e))),
+			}
+		});
+
+		methods.add_method("protect", |_, this, _: ()| -> LuaResult<LuaStanza> {
+			let root = this.0.borrow().root_ptr();
+			let mut root = root.borrow_mut();
+			match root.protect() {
+				Ok(_) => Ok(this.clone()),
+				Err(e) => Err(LuaError::external(e)),
 			}
 		});
 
@@ -647,7 +671,7 @@ pub fn stanza_reply<'l>(lua: &'l Lua, st: LuaValue) -> LuaResult<LuaStanza> {
 	Ok(LuaStanza::wrap(stanza::Stanza::wrap(result)))
 }
 
-fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::Element>, extra: LuaTable) {
+fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::Element>, extra: LuaTable) -> LuaResult<()> {
 	if condition == "gone" {
 		// check for uri in table, if it exists, we add it as text to
 		// the condition node
@@ -665,7 +689,10 @@ fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::E
 	}
 	match extra.get::<_, LuaStanza>("tag") {
 		Ok(st) => {
-			error.push(tree::Node::Element(st.0.borrow().root_ptr()));
+			match error.push(tree::Node::Element(st.0.borrow().root_ptr())) {
+				Err(e) => return Err(LuaError::external(e)),
+				Ok(_) => (),
+			};
 		},
 		_ => {
 			extra.get::<_, LuaValue>("namespace").and_then(|nsv| {
@@ -683,7 +710,8 @@ fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::E
 				Ok(())
 			}).ok();
 		}
-	}
+	};
+	Ok(())
 }
 
 fn stanza_error_reply_from_util_error<'l>(_: &'l Lua, (st, error_table): (LuaStanza, LuaTable)) -> LuaResult<LuaStanza> {
@@ -714,7 +742,7 @@ fn stanza_error_reply_from_util_error<'l>(_: &'l Lua, (st, error_table): (LuaSta
 			let mut st = stanza::Stanza::wrap(r);
 			st.down(0);
 			if let Some((condition, extra_tbl)) = extra {
-				process_util_error_extra(condition, st.try_deref().unwrap().borrow_mut(), extra_tbl);
+				process_util_error_extra(condition, st.try_deref().unwrap().borrow_mut(), extra_tbl)?;
 			}
 			Ok(LuaStanza::wrap(st))
 		},

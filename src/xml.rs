@@ -17,28 +17,28 @@ pub fn escape<'a, W>(out: &'a mut W, val: &'a str) -> fmt::Result
 	let mut last_index = 0;
 	for (index_to_escape, special) in val.match_indices(&SPECIALS[..]) {
 		if index_to_escape > last_index {
-			write!(out, "{}", &val[last_index..index_to_escape])?;
+			out.write_str(&val[last_index..index_to_escape])?;
 		}
 		match special {
-			"\"" => write!(out, "{}", "&quot;")?,
-			"'" => write!(out, "{}", "&apos;")?,
-			"<" => write!(out, "{}", "&lt;")?,
-			">" => write!(out, "{}", "&gt;")?,
-			"&" => write!(out, "{}", "&amp;")?,
+			"\"" => out.write_str("&quot;")?,
+			"'" => out.write_str("&apos;")?,
+			"<" => out.write_str("&lt;")?,
+			">" => out.write_str("&gt;")?,
+			"&" => out.write_str("&amp;")?,
 			_ => panic!("unexpected special character?!"),
 		}
 		last_index = index_to_escape + 1
 	}
-	write!(out, "{}", &val[last_index..val.len()])?;
+	out.write_str(&val[last_index..val.len()])?;
 	Ok(())
 }
 
 fn attr_escape_value<'a, W>(out: &'a mut W, val: &'a str) -> fmt::Result
 	where W: Write
 {
-	write!(out, "'")?;
+	out.write_str("'")?;
 	escape(out, val)?;
-	write!(out, "'")?;
+	out.write_str("'")?;
 	Ok(())
 }
 
@@ -69,7 +69,7 @@ pub fn head_as_str<'a>(el: Ref<'a, tree::Element>) -> Result<String, fmt::Error>
 	for (k, v) in el.attr.iter() {
 		attr_escape(&mut result, k, v, &mut nsid)?;
 	}
-	write!(result, ">")?;
+	result.write_str(">")?;
 	Ok(result)
 }
 
@@ -124,7 +124,7 @@ impl<'a> FormatterState<'a> {
 		where W: Write
 	{
 		match node {
-			tree::Node::Text(s) => f.write_str(s),
+			tree::Node::Text(s) => escape(f, s),
 			tree::Node::Element(eptr) => self.format_el(eptr.borrow(), f),
 		}
 	}
@@ -189,6 +189,7 @@ impl Formatter {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::collections::HashMap;
 
 	#[test]
 	fn escape_plain() {
@@ -244,5 +245,24 @@ mod tests {
 		let mut buf = String::new();
 		assert!(escape(&mut buf, "foobar>2342").is_ok());
 		assert_eq!(buf, "foobar&gt;2342");
+	}
+
+	#[test]
+	fn format_escapes_text_nodes() {
+		let el = tree::ElementPtr::new("foo".to_string());
+		el.borrow_mut().text("&bar;<baz/>fnord\"'".to_string());
+		let fmt = Formatter{ indent: None, initial_level: 0 };
+		let s = fmt.format(el.borrow()).unwrap();
+		assert_eq!(s, "<foo>&amp;bar;&lt;baz/&gt;fnord&quot;&apos;</foo>");
+	}
+
+	#[test]
+	fn format_escapes_attribute_values() {
+		let mut attr = HashMap::<String, String>::new();
+		attr.insert("moo".to_string(), "&bar;<baz/>fnord\"'".to_string());
+		let el = tree::ElementPtr::new_with_attr("foo".to_string(), Some(attr));
+		let fmt = Formatter{ indent: None, initial_level: 0 };
+		let s = fmt.format(el.borrow()).unwrap();
+		assert_eq!(s, "<foo moo='&amp;bar;&lt;baz/&gt;fnord&quot;&apos;'/>");
 	}
 }

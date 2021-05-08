@@ -61,7 +61,7 @@ impl Deserialize for tree::ElementPtr {
 				if let LuaValue::Nil = val {
 					break;
 				}
-				el_mut.push(tree::Node::deserialize(lua, val)?);
+				el_mut.push(tree::Node::deserialize(lua, val)?).unwrap();
 				numindex += 1;
 			}
 		}
