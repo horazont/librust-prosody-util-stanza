@@ -10,6 +10,7 @@ mod fake_xpath;
 mod xml;
 mod lua_convert;
 mod lua_serialize_compat;
+mod stream;
 
 #[mlua::lua_module]
 fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
@@ -27,6 +28,12 @@ fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
 	stanza.set("preserialize", lua.create_function(lua::stanza_preserialize)?)?;
 	stanza.set("deserialize", lua.create_function(lua::stanza_deserialize)?)?;
 	exports.set("stanza", stanza);
+
+	let xmppstream = lua.create_table()?;
+	xmppstream.set("new", lua.create_function(stream::lua::stream_new)?)?;
+	xmppstream.set("ns_separator", "\x01");
+	xmppstream.set("ns_pattern", "^([^\x01]*)\x01?(.*)$");
+	exports.set("xmppstream", xmppstream);
 
 	Ok(exports)
 }
