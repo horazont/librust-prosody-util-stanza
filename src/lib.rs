@@ -12,19 +12,21 @@ mod lua_convert;
 mod lua_serialize_compat;
 
 #[mlua::lua_module]
-fn util_stanza(lua: &Lua) -> LuaResult<LuaTable> {
+fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
 	let exports = lua.create_table()?;
 
-	exports.set("stanza", lua.create_function(lua::stanza_new)?)?;
-	exports.set("message", lua.create_function(lua::stanza_message)?)?;
-	exports.set("iq", lua.create_function(lua::stanza_iq)?)?;
-	exports.set("presence", lua.create_function(lua::stanza_presence)?)?;
-	exports.set("reply", lua.create_function(lua::stanza_reply)?)?;
-	exports.set("error_reply", lua.create_function(lua::stanza_error_reply)?)?;
-	exports.set("is_stanza", lua.create_function(lua::stanza_test)?)?;
-	exports.set("clone", lua.create_function(lua::stanza_clone)?)?;
-	exports.set("preserialize", lua.create_function(lua::stanza_preserialize)?)?;
-	exports.set("deserialize", lua.create_function(lua::stanza_deserialize)?)?;
+	let stanza = lua.create_table()?;
+	stanza.set("stanza", lua.create_function(lua::stanza_new)?)?;
+	stanza.set("message", lua.create_function(lua::stanza_message)?)?;
+	stanza.set("iq", lua.create_function(lua::stanza_iq)?)?;
+	stanza.set("presence", lua.create_function(lua::stanza_presence)?)?;
+	stanza.set("reply", lua.create_function(lua::stanza_reply)?)?;
+	stanza.set("error_reply", lua.create_function(lua::stanza_error_reply)?)?;
+	stanza.set("is_stanza", lua.create_function(lua::stanza_test)?)?;
+	stanza.set("clone", lua.create_function(lua::stanza_clone)?)?;
+	stanza.set("preserialize", lua.create_function(lua::stanza_preserialize)?)?;
+	stanza.set("deserialize", lua.create_function(lua::stanza_deserialize)?)?;
+	exports.set("stanza", stanza);
 
 	Ok(exports)
 }
