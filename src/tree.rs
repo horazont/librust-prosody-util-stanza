@@ -72,11 +72,7 @@ impl ElementPtr {
 	}
 
 	pub fn wrap(el: Element) -> ElementPtr {
-		if el.self_ptr.borrow().upgrade().is_some() {
-			panic!("attempt to wrap an already wrapped Element");
-		}
 		let wrapped = ElementPtr(Rc::new(RefCell::new(el)));
-		*wrapped.borrow_mut().self_ptr.borrow_mut() = wrapped.downgrade();
 		wrapped
 	}
 
@@ -167,12 +163,6 @@ pub struct Element {
 	pub namespaces: HashMap<String, String>,
 	children: Children,
 	protected: bool,
-	// using cells here because those don’t actually change anything about
-	// the logical Element ... it would otherwise require to have the elements
-	// be mutable to be inserted in a subtree.
-	// using a refcell because Weak is not copyable.
-	parent: RefCell<WeakElementPtr>,
-	self_ptr: RefCell<WeakElementPtr>,
 }
 
 impl Node {
@@ -306,14 +296,7 @@ impl Element {
 			namespaces: HashMap::new(),
 			children: Children::new(),
 			protected: false,
-			parent: RefCell::new(WeakElementPtr::new()),
-			self_ptr: RefCell::new(WeakElementPtr::new()),
 		}
-	}
-
-	fn self_ptr(&self) -> WeakElementPtr {
-		debug_assert!(self.self_ptr.borrow().upgrade().is_some());
-		self.self_ptr.borrow().clone()
 	}
 
 	pub fn tag<'a>(&'a mut self, name: String, attr: Option<HashMap<String, String>>) -> ElementPtr {
@@ -377,14 +360,6 @@ impl Element {
 		Ok(())
 	}
 
-	fn parent(&self) -> Option<ElementPtr> {
-		self.parent.borrow().upgrade()
-	}
-
-	fn clear_parent(&self) {
-		*self.parent.borrow_mut() = WeakElementPtr::new();
-	}
-
 	pub fn map_elements<F, T>(&mut self, f: F) -> Result<(), MapElementsError<T>>
 		where F: Fn(ElementPtr) -> Result<Option<ElementPtr>, T>
 	{
@@ -398,11 +373,7 @@ impl Element {
 				Node::Element(el) => {
 					match f(el.clone()) {
 						Err(e) => return Err(MapElementsError::External(e)),
-						Ok(None) => {
-							// clear parent reference to orphan element
-							el.borrow().clear_parent();
-							continue
-						},
+						Ok(None) => continue,
 						Ok(Some(new_el)) => {
 							// we need to do the usual loop-detection dance
 							// here
@@ -432,13 +403,6 @@ impl Element {
 	}
 
 	fn push_unchecked(&mut self, n: Node) {
-		if let Node::Element(el) = &n {
-			if !el.borrow().protected {
-				// protected elements may be multi-parent, so we don't ever
-				// set the parent.
-				*el.borrow_mut().parent.borrow_mut() = self.self_ptr();
-			}
-		}
 		self.children.push(n);
 	}
 
@@ -486,16 +450,13 @@ impl Element {
 	}
 
 	pub fn protect(&mut self) -> Result<(), ProtectError> {
-		if self.parent().is_some() {
-			return Err(ProtectError::NodeHasParent);
-		}
 		self.protect_rec()
 	}
 }
 
 impl PartialEq for Element {
 	// need a custom implementation because we don’t want to compare the
-	// self and parent weak refs
+	// protected field
 	fn eq(&self, other: &Element) -> bool {
 		self.localname == other.localname &&
 			self.attr == other.attr &&
@@ -618,21 +579,11 @@ mod tests {
 	}
 
 	#[test]
-	fn elementptr_new_sets_self_ptr() {
-		let el_ptr = ElementPtr::new("message".to_string());
-		let upgraded = el_ptr.borrow().self_ptr.borrow().upgrade();
-		assert!(upgraded.is_some());
-		assert!(ElementPtr::ptr_eq(&el_ptr, &upgraded.unwrap()));
-	}
-
-	#[test]
 	fn element_new() {
 		let el = Element::raw_new("message".to_string());
 		assert_eq!(el.localname, "message");
 		assert!(el.children.is_empty());
 		assert!(el.attr.is_empty());
-		assert!(el.self_ptr.borrow().upgrade().is_none());
-		assert!(el.parent.borrow().upgrade().is_none());
 	}
 
 	#[test]
@@ -684,32 +635,6 @@ mod tests {
 		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
 		assert_eq!(msg.borrow().len(), 1);
 		assert!(ElementPtr::ptr_eq(&body, &msg.borrow()[0].as_element_ptr().unwrap()));
-	}
-
-	#[test]
-	fn element_push_sets_parent() {
-		let msg = ElementPtr::new("message".to_string());
-		let body = ElementPtr::new("body".to_string());
-		body.borrow_mut().text("foobar".to_string());
-		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
-		assert!(ElementPtr::ptr_eq(&body.borrow().parent().unwrap(), &msg));
-	}
-
-	#[test]
-	fn element_tag_sets_parent() {
-		let msg = ElementPtr::new("message".to_string());
-		let body = msg.borrow_mut().tag("body".to_string(), None);
-		assert!(ElementPtr::ptr_eq(&body.borrow().parent().unwrap(), &msg));
-	}
-
-	#[test]
-	fn element_push_does_not_set_parent_of_protected_element() {
-		let msg = ElementPtr::new("message".to_string());
-		let body = ElementPtr::new("body".to_string());
-		body.borrow_mut().text("foobar".to_string());
-		body.borrow_mut().protect().unwrap();
-		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
-		assert!(body.borrow().parent().is_none());
 	}
 
 	#[test]
@@ -776,7 +701,6 @@ mod tests {
 			Ok(None)
 		}).unwrap();
 		assert_eq!(el_ptr.borrow().len(), 0);
-		assert!(child_ptr.borrow().parent().is_none());
 	}
 
 	#[test]
