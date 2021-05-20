@@ -131,7 +131,7 @@ impl<'l> LuaUserData for ProsodyXmppStream<'l> {
 						maybe_set(&attrs, "from", from)?;
 						maybe_set(&attrs, "id", id)?;
 						maybe_set(&attrs, "xml:lang", lang)?;
-						attrs.set("version", version.as_string())?;
+						maybe_set(&attrs, "version", version)?;
 						drop(stream);
 						cb.call::<_, LuaValue>((session.clone(), attrs))?;
 					},
@@ -160,10 +160,11 @@ impl<'l> LuaUserData for ProsodyXmppStream<'l> {
 	}
 }
 
-pub fn stream_new<'l>(l: &'l Lua, (session, tbl): (LuaValue, LuaTable<'l>)) -> LuaResult<LuaValue<'l>> {
+pub fn stream_new<'l>(l: &'l Lua, (session, tbl, size_limit): (LuaValue, LuaTable<'l>, Option<usize>)) -> LuaResult<LuaValue<'l>> {
 	let cbtbl = capture_callbacks(l, &tbl)?;
 	cbtbl.raw_set(IDX_SESSION, session)?;
-	let xs = ProsodyXmppStream::new_from_streamcallbacks(&tbl)?;
+	let mut xs = ProsodyXmppStream::new_from_streamcallbacks(&tbl)?;
+	xs.stream.stanza_limit = Some(size_limit.unwrap_or(1024*1024*10));
 	let xs = match xs.to_lua(l)? {
 		LuaValue::UserData(ud) => ud,
 		_ => panic!("unexpected result of to_lua"),

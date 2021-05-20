@@ -6,6 +6,8 @@ use std::ops::{Deref, DerefMut};
 use std::slice::Iter;
 use std::error::Error;
 
+use rxml::CData;
+
 #[derive(PartialEq, Debug)]
 pub enum InsertError {
 	NodeHasParent,
@@ -63,12 +65,12 @@ pub struct ElementPtr(Rc<RefCell<Element>>);
 struct WeakElementPtr(Weak<RefCell<Element>>);
 
 impl ElementPtr {
-	pub fn new(name: String) -> ElementPtr {
-		ElementPtr::wrap(Element::raw_new(name))
+	pub fn new(nsuri: Option<Rc<CData>>, name: String) -> ElementPtr {
+		ElementPtr::wrap(Element::raw_new(nsuri, name))
 	}
 
-	pub fn new_with_attr(name: String, attr: Option<HashMap<String, String>>) -> ElementPtr {
-		ElementPtr::wrap(Element::raw_new_with_attr(name, attr))
+	pub fn new_with_attr(nsuri: Option<Rc<CData>>, name: String, attr: Option<HashMap<String, String>>) -> ElementPtr {
+		ElementPtr::wrap(Element::raw_new_with_attr(nsuri, name, attr))
 	}
 
 	pub fn wrap(el: Element) -> ElementPtr {
@@ -158,9 +160,10 @@ impl<'a> Iterator for ChildElementIterator<'a> {
 }
 
 pub struct Element {
+	pub nsuri: Option<Rc<CData>>,
 	pub localname: String,
 	pub attr: HashMap<String, String>,
-	pub namespaces: HashMap<String, String>,
+	// pub namespaces: HashMap<String, String>,
 	children: Children,
 	protected: bool,
 }
@@ -282,25 +285,26 @@ impl ElementView<'_> {
 }
 
 impl Element {
-	fn raw_new(name: String) -> Element {
-		Element::raw_new_with_attr(name, None)
+	fn raw_new(nsuri: Option<Rc<CData>>, name: String) -> Element {
+		Element::raw_new_with_attr(nsuri, name, None)
 	}
 
-	fn raw_new_with_attr(name: String, attr: Option<HashMap<String, String>>) -> Element {
+	fn raw_new_with_attr(nsuri: Option<Rc<CData>>, name: String, attr: Option<HashMap<String, String>>) -> Element {
 		Element{
+			nsuri: nsuri,
 			localname: name,
 			attr: match attr {
 				Some(attr) => attr,
 				None => HashMap::new(),
 			},
-			namespaces: HashMap::new(),
+			// namespaces: HashMap::new(),
 			children: Children::new(),
 			protected: false,
 		}
 	}
 
-	pub fn tag<'a>(&'a mut self, name: String, attr: Option<HashMap<String, String>>) -> ElementPtr {
-		let result_ptr = ElementPtr::new_with_attr(name, attr);
+	pub fn tag<'a>(&'a mut self, xmlns: Option<Rc<CData>>, name: String, attr: Option<HashMap<String, String>>) -> ElementPtr {
+		let result_ptr = ElementPtr::new_with_attr(xmlns, name, attr);
 		// if this node is protected, we need to inherit that.
 		result_ptr.borrow_mut().protected = self.protected;
 		let new_node = Node::Element(result_ptr.clone());
@@ -315,6 +319,7 @@ impl Element {
 
 	pub fn deep_clone(&self) -> Element {
 		let mut result = Element::raw_new_with_attr(
+			self.nsuri.clone(),
 			self.localname.clone(),
 			Some(self.attr.clone()),
 		);
@@ -460,8 +465,8 @@ impl PartialEq for Element {
 	fn eq(&self, other: &Element) -> bool {
 		self.localname == other.localname &&
 			self.attr == other.attr &&
-			self.children == other.children &&
-			self.namespaces == other.namespaces
+			self.children == other.children /* &&
+			self.namespaces == other.namespaces */
 	}
 }
 
@@ -483,8 +488,13 @@ impl DerefMut for Element {
 
 impl fmt::Debug for Element {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.debug_struct("Element")
-			.field("localname", &self.localname)
+		let mut st = f.debug_struct("Element");
+		let mut st = if let Some(nsuri) = self.nsuri.as_ref() {
+			st.field("nsuri", &*nsuri)
+		} else {
+			st.field("nsuri", &self.nsuri)
+		};
+		st.field("localname", &self.localname)
 			.field("attr", &self.attr)
 			.field("children", &self.children)
 			.finish()
@@ -496,11 +506,11 @@ mod tests {
 	use super::*;
 
 	fn prep_message() -> ElementPtr {
-		let msg_ptr = ElementPtr::new("message".to_string());
+		let msg_ptr = ElementPtr::new(None, "message".to_string());
 		{
 			let mut msg = msg_ptr.borrow_mut();
-			msg.tag("body".to_string(), None).borrow_mut().text("Hello World!".to_string());
-			msg.tag("delay".to_string(), None);
+			msg.tag(None, "body".to_string(), None).borrow_mut().text("Hello World!".to_string());
+			msg.tag(None, "delay".to_string(), None);
 		}
 		msg_ptr
 	}
@@ -536,7 +546,7 @@ mod tests {
 	#[test]
 	fn children_push_element() {
 		let mut c = Children::new();
-		c.push(Node::Element(ElementPtr::new("el".to_string())));
+		c.push(Node::Element(ElementPtr::new(None, "el".to_string())));
 
 		assert!(c.len() == 1);
 		assert!(!c.is_empty());
@@ -561,11 +571,11 @@ mod tests {
 	#[test]
 	fn children_element_view_mixed() {
 		let mut c = Children::new();
-		c.push(Node::Element(ElementPtr::new("el1".to_string())));
+		c.push(Node::Element(ElementPtr::new(None, "el1".to_string())));
 		c.push(Node::Text("foo".to_string()));
-		c.push(Node::Element(ElementPtr::new("el2".to_string())));
+		c.push(Node::Element(ElementPtr::new(None, "el2".to_string())));
 		c.push(Node::Text("bar".to_string()));
-		c.push(Node::Element(ElementPtr::new("el3".to_string())));
+		c.push(Node::Element(ElementPtr::new(None, "el3".to_string())));
 		c.push(Node::Text("baz".to_string()));
 
 		assert!(c.len() == 6);
@@ -580,7 +590,7 @@ mod tests {
 
 	#[test]
 	fn element_new() {
-		let el = Element::raw_new("message".to_string());
+		let el = Element::raw_new(None, "message".to_string());
 		assert_eq!(el.localname, "message");
 		assert!(el.children.is_empty());
 		assert!(el.attr.is_empty());
@@ -588,10 +598,28 @@ mod tests {
 
 	#[test]
 	fn element_tag() {
-		let el_ptr = ElementPtr::new("message".to_string());
+		let el_ptr = ElementPtr::new(None, "message".to_string());
 		{
-			let body_ptr = el_ptr.borrow_mut().tag("body".to_string(), None);
+			let body_ptr = el_ptr.borrow_mut().tag(None, "body".to_string(), None);
 			let body = body_ptr.borrow();
+			assert_eq!(body.nsuri, None);
+			assert_eq!(body.localname, "body");
+			assert!(body.attr.is_empty());
+			assert!(body.children.is_empty());
+		}
+		assert_eq!(el_ptr.borrow().len(), 1);
+		assert_eq!(el_ptr.borrow().element_view().len(), 1);
+		assert_eq!(el_ptr.borrow()[0].as_element_ptr().unwrap().borrow().localname, "body");
+	}
+
+	#[test]
+	fn element_tag_inherits_nsuri_from_parent() {
+		let nsuri = Some(Rc::new(CData::from_string("uri:foobar".to_string()).unwrap()));
+		let el_ptr = ElementPtr::new(nsuri.clone(), "message".to_string());
+		{
+			let body_ptr = el_ptr.borrow_mut().tag(None, "body".to_string(), None);
+			let body = body_ptr.borrow();
+			assert_eq!(body.nsuri, nsuri);
 			assert_eq!(body.localname, "body");
 			assert!(body.attr.is_empty());
 			assert!(body.children.is_empty());
@@ -603,7 +631,7 @@ mod tests {
 
 	#[test]
 	fn element_push_rejects_self_insertion() {
-		let el_ptr = ElementPtr::new("message".to_string());
+		let el_ptr = ElementPtr::new(None, "message".to_string());
 		let n = Node::Element(el_ptr.clone());
 		assert_eq!(el_ptr.borrow_mut().push(n), Err(InsertError::NodeIsSelf));
 		assert_eq!(el_ptr.borrow().len(), 0);
@@ -620,8 +648,8 @@ mod tests {
 
 	#[test]
 	fn element_push_rejects_root_insertion_at_child() {
-		let root = ElementPtr::new("root".to_string());
-		let child = root.borrow_mut().tag("child".to_string(), None);
+		let root = ElementPtr::new(None, "root".to_string());
+		let child = root.borrow_mut().tag(None, "child".to_string(), None);
 		let push_result = child.borrow_mut().push(Node::Element(root.clone()));
 		assert_eq!(push_result, Err(InsertError::LoopDetected));
 		assert_eq!(child.borrow().len(), 0);
@@ -629,8 +657,8 @@ mod tests {
 
 	#[test]
 	fn element_push_allows_adding_freestanding_element() {
-		let msg = ElementPtr::new("message".to_string());
-		let body = ElementPtr::new("body".to_string());
+		let msg = ElementPtr::new(None, "message".to_string());
+		let body = ElementPtr::new(None, "body".to_string());
 		body.borrow_mut().text("foobar".to_string());
 		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
 		assert_eq!(msg.borrow().len(), 1);
@@ -639,8 +667,8 @@ mod tests {
 
 	#[test]
 	fn element_push_allows_adding_child_element_of_unrelated_tree() {
-		let msg = ElementPtr::new("message".to_string());
-		let body = ElementPtr::new("body".to_string());
+		let msg = ElementPtr::new(None, "message".to_string());
+		let body = ElementPtr::new(None, "body".to_string());
 		body.borrow_mut().text("foobar".to_string());
 		msg.borrow_mut().push(Node::Element(body.clone())).unwrap();
 		assert_eq!(msg.borrow().len(), 1);
@@ -671,7 +699,7 @@ mod tests {
 	fn element_map_elements_rejects_insertion_of_parent_at_child() {
 		let root = prep_message();
 		let act_on = root.borrow()[1].as_element_ptr().unwrap();
-		act_on.borrow_mut().tag("dummy".to_string(), None);
+		act_on.borrow_mut().tag(None, "dummy".to_string(), None);
 		assert_eq!(root.borrow().len(), 2);
 		assert_eq!(act_on.borrow().len(), 1);
 		let map_result = act_on.borrow_mut().map_elements::<_, ()>(|_| {
@@ -717,8 +745,8 @@ mod tests {
 
 	#[test]
 	fn element_text() {
-		let el = ElementPtr::new("message".to_string());
-		let body_ptr = el.borrow_mut().tag("body".to_string(), None);
+		let el = ElementPtr::new(None, "message".to_string());
+		let body_ptr = el.borrow_mut().tag(None, "body".to_string(), None);
 		let mut body = body_ptr.borrow_mut();
 		body.text("Hello World!".to_string());
 		assert_eq!(body.children.len(), 1);
@@ -728,8 +756,8 @@ mod tests {
 
 	#[test]
 	fn element_protect_is_recursive() {
-		let el = ElementPtr::new("message".to_string());
-		el.borrow_mut().tag("body".to_string(), None);
+		let el = ElementPtr::new(None, "message".to_string());
+		el.borrow_mut().tag(None, "body".to_string(), None);
 		assert!(!el.borrow().is_protected());
 		assert!(!el.borrow()[0].as_element_ptr().unwrap().borrow().is_protected());
 		el.borrow_mut().protect().unwrap();
@@ -739,10 +767,10 @@ mod tests {
 
 	#[test]
 	fn element_protect_prohibits_push() {
-		let el = ElementPtr::new("message".to_string());
-		el.borrow_mut().tag("body".to_string(), None);
+		let el = ElementPtr::new(None, "message".to_string());
+		el.borrow_mut().tag(None, "body".to_string(), None);
 		el.borrow_mut().protect().unwrap();
-		let new_node = Node::Element(ElementPtr::new("delay".to_string()));
+		let new_node = Node::Element(ElementPtr::new(None, "delay".to_string()));
 		assert_eq!(el.borrow().len(), 1);
 		assert_eq!(el.borrow_mut().push(new_node), Err(InsertError::Protected));
 		assert_eq!(el.borrow().len(), 1);
@@ -750,8 +778,8 @@ mod tests {
 
 	#[test]
 	fn element_protect_prohibits_map_elements() {
-		let el = ElementPtr::new("message".to_string());
-		el.borrow_mut().tag("body".to_string(), None);
+		let el = ElementPtr::new(None, "message".to_string());
+		el.borrow_mut().tag(None, "body".to_string(), None);
 		el.borrow_mut().protect().unwrap();
 		assert_eq!(el.borrow_mut().map_elements::<_, ()>(|_| {
 			Ok(None)
@@ -761,16 +789,16 @@ mod tests {
 
 	#[test]
 	fn element_protect_allows_tag_and_protects_it() {
-		let el = ElementPtr::new("message".to_string());
+		let el = ElementPtr::new(None, "message".to_string());
 		el.borrow_mut().protect().unwrap();
-		el.borrow_mut().tag("body".to_string(), None);
+		el.borrow_mut().tag(None, "body".to_string(), None);
 		assert_eq!(el.borrow().len(), 1);
 		assert!(el.borrow()[0].as_element_ptr().unwrap().borrow().is_protected());
 	}
 
 	#[test]
 	fn element_protect_allows_text() {
-		let el = ElementPtr::new("message".to_string());
+		let el = ElementPtr::new(None, "message".to_string());
 		el.borrow_mut().protect().unwrap();
 		el.borrow_mut().text("foobar2342".to_string());
 		assert_eq!(el.borrow().len(), 1);
@@ -778,9 +806,9 @@ mod tests {
 
 	#[test]
 	fn element_unprotected_elements_can_be_inserted_into_separate_trees() {
-		let p1 = ElementPtr::new("message".to_string());
-		let p2 = ElementPtr::new("message".to_string());
-		let sig = ElementPtr::new("signature".to_string());
+		let p1 = ElementPtr::new(None, "message".to_string());
+		let p2 = ElementPtr::new(None, "message".to_string());
+		let sig = ElementPtr::new(None, "signature".to_string());
 
 		p1.borrow_mut().push(Node::Element(sig.clone())).unwrap();
 		p2.borrow_mut().push(Node::Element(sig.clone())).unwrap();
@@ -799,9 +827,9 @@ mod tests {
 
 	#[test]
 	fn element_protected_elements_can_be_inserted_into_separate_trees() {
-		let p1 = ElementPtr::new("message".to_string());
-		let p2 = ElementPtr::new("message".to_string());
-		let sig = ElementPtr::new("signature".to_string());
+		let p1 = ElementPtr::new(None, "message".to_string());
+		let p2 = ElementPtr::new(None, "message".to_string());
+		let sig = ElementPtr::new(None, "signature".to_string());
 		sig.borrow_mut().protect().unwrap();
 
 		p1.borrow_mut().push(Node::Element(sig.clone())).unwrap();

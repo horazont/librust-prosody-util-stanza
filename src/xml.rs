@@ -1,6 +1,8 @@
 use std::cell::Ref;
 use std::fmt;
+use std::rc::Rc;
 use std::fmt::Write;
+use rxml::CData;
 use crate::tree;
 
 const SPECIALS: &'static [char] = &[
@@ -82,6 +84,7 @@ struct FormatterState<'a> {
 	formatter: &'a Formatter,
 	depth: usize,
 	newline: String,
+	parent_ns: Option<Rc<CData>>,
 }
 
 impl<'a> FormatterState<'a> {
@@ -100,6 +103,7 @@ impl<'a> FormatterState<'a> {
 			formatter: formatter,
 			depth: 0,
 			newline: newline,
+			parent_ns: None,
 		}
 	}
 
@@ -134,6 +138,13 @@ impl<'a> FormatterState<'a> {
 	{
 		write!(f, "<{}", el.localname)?;
 		let mut nsid = 0usize;
+		if self.parent_ns != el.nsuri {
+			if let Some(nsuri) = el.nsuri.as_ref() {
+				attr_escape(f, "xmlns", nsuri.as_str(), &mut nsid)?;
+			} else {
+				attr_escape(f, "xmlns", "", &mut nsid)?;
+			}
+		}
 		for (k, v) in el.attr.iter() {
 			attr_escape(f, k, v, &mut nsid)?;
 		}
@@ -148,6 +159,7 @@ impl<'a> FormatterState<'a> {
 			} else {
 				self.indent();
 				for child in el.iter() {
+					self.parent_ns = el.nsuri.clone();
 					if let tree::Node::Text(ref s) = child {
 						// whitespace-only children are ignored
 						if self.formatter.indent.is_some() && s.find(|c| { !char::is_whitespace(c) }).is_none() {
@@ -163,6 +175,7 @@ impl<'a> FormatterState<'a> {
 		} else {
 			f.write_str(">")?;
 			for child in el.iter() {
+				self.parent_ns = el.nsuri.clone();
 				self.format_node(child, f)?;
 			}
 		}
@@ -249,7 +262,7 @@ mod tests {
 
 	#[test]
 	fn format_escapes_text_nodes() {
-		let el = tree::ElementPtr::new("foo".to_string());
+		let el = tree::ElementPtr::new(None, "foo".to_string());
 		el.borrow_mut().text("&bar;<baz/>fnord\"'".to_string());
 		let fmt = Formatter{ indent: None, initial_level: 0 };
 		let s = fmt.format(el.borrow()).unwrap();
@@ -260,9 +273,25 @@ mod tests {
 	fn format_escapes_attribute_values() {
 		let mut attr = HashMap::<String, String>::new();
 		attr.insert("moo".to_string(), "&bar;<baz/>fnord\"'".to_string());
-		let el = tree::ElementPtr::new_with_attr("foo".to_string(), Some(attr));
+		let el = tree::ElementPtr::new_with_attr(None, "foo".to_string(), Some(attr));
 		let fmt = Formatter{ indent: None, initial_level: 0 };
 		let s = fmt.format(el.borrow()).unwrap();
 		assert_eq!(s, "<foo moo='&amp;bar;&lt;baz/&gt;fnord&quot;&apos;'/>");
+	}
+
+	#[test]
+	fn format_handles_namespaces() {
+		let ns1 = Rc::new(CData::from_string("uri:foo".to_string()).unwrap());
+		let ns2 = Rc::new(CData::from_string("uri:bar".to_string()).unwrap());
+		let mut el = tree::ElementPtr::new_with_attr(
+			Some(ns1.clone()),
+			"foo".to_string(),
+			None,
+		);
+		let c1 = el.borrow_mut().tag(Some(ns1.clone()), "child".to_string(), None);
+		let c2 = el.borrow_mut().tag(Some(ns2.clone()), "child".to_string(), None);
+		let fmt = Formatter{ indent: None, initial_level: 0 };
+		let s = fmt.format(el.borrow()).unwrap();
+		assert_eq!(s, "<foo xmlns='uri:foo'><child/><child xmlns='uri:bar'/></foo>");
 	}
 }

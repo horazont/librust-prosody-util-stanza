@@ -1,6 +1,9 @@
+use std::rc::Rc;
 use std::collections::HashMap;
 use std::cell::Ref;
 use std::fmt;
+
+use rxml::CData;
 
 use crate::tree;
 use crate::path;
@@ -12,9 +15,9 @@ pub struct Stanza {
 }
 
 impl Stanza {
-	pub fn new(name: String, attr: Option<HashMap<String, String>>) -> Stanza {
+	pub fn new(nsuri: Option<Rc<CData>>, name: String, attr: Option<HashMap<String, String>>) -> Stanza {
 		Stanza::wrap(
-			tree::ElementPtr::new_with_attr(name, attr),
+			tree::ElementPtr::new_with_attr(nsuri, name, attr),
 		)
 	}
 
@@ -37,12 +40,12 @@ impl Stanza {
 		self.root.clone()
 	}
 
-	pub fn tag(&mut self, name: String, attr: Option<HashMap<String, String>>) -> Option<tree::ElementPtr> {
+	pub fn tag(&mut self, nsuri: Option<Rc<CData>>, name: String, attr: Option<HashMap<String, String>>) -> Option<tree::ElementPtr> {
 		let parent_ptr = self.cursor.deref_on(self.root.clone())?;
 		let mut parent = parent_ptr.borrow_mut();
 		let new_index = parent.len();
 		self.cursor.down(new_index);
-		Some(parent.tag(name, attr))
+		Some(parent.tag(nsuri, name, attr))
 	}
 
 	pub fn text(&mut self, data: String) -> bool {
@@ -82,7 +85,7 @@ mod tests {
 
 	#[test]
 	fn stanza_new_cursor_at_root() {
-		let st = Stanza::new("message".to_string(), None);
+		let st = Stanza::new(None, "message".to_string(), None);
 		let root = st.try_deref();
 		assert!(root.is_some());
 		let root = root.unwrap();
@@ -91,8 +94,8 @@ mod tests {
 
 	#[test]
 	fn stanza_tag_descends() {
-		let mut st = Stanza::new("message".to_string(), None);
-		let body = st.tag("body".to_string(), None);
+		let mut st = Stanza::new(None, "message".to_string(), None);
+		let body = st.tag(None, "body".to_string(), None);
 		assert!(body.is_some());
 		let body = body.unwrap();
 		let body_derefd = st.try_deref();
@@ -103,7 +106,7 @@ mod tests {
 
 	#[test]
 	fn stanza_text_does_not_descend() {
-		let mut st = Stanza::new("body".to_string(), None);
+		let mut st = Stanza::new(None, "body".to_string(), None);
 		st.text("foo".to_string());
 		let root = st.try_deref();
 		assert!(root.is_some());
@@ -113,9 +116,9 @@ mod tests {
 
 	#[test]
 	fn stanza_tag_inserts_at_cursor() {
-		let mut st = Stanza::new("iq".to_string(), None);
-		st.tag("query".to_string(), None);
-		st.tag("item".to_string(), None);
+		let mut st = Stanza::new(None, "iq".to_string(), None);
+		st.tag(None, "query".to_string(), None);
+		st.tag(None, "item".to_string(), None);
 		assert_eq!(st.root().len(), 1);
 		assert_eq!(st.root()[0].as_element_ptr().unwrap().borrow().len(), 1);
 		assert_eq!(st.root()[0].as_element_ptr().unwrap().borrow()[0].as_element_ptr().unwrap().borrow().len(), 0);
@@ -123,8 +126,8 @@ mod tests {
 
 	#[test]
 	fn stanza_up_moves_cursor() {
-		let mut st = Stanza::new("message".to_string(), None);
-		st.tag("body".to_string(), None).unwrap().borrow_mut().text("Hello World!".to_string());
+		let mut st = Stanza::new(None, "message".to_string(), None);
+		st.tag(None, "body".to_string(), None).unwrap().borrow_mut().text("Hello World!".to_string());
 		st.up();
 
 		let root_derefd = st.try_deref();
@@ -135,11 +138,11 @@ mod tests {
 
 	#[test]
 	fn stanza_reset_moves_cursor() {
-		let mut st = Stanza::new("iq".to_string(), None);
-		st.tag("query".to_string(), None);
-		st.tag("extra".to_string(), None);
+		let mut st = Stanza::new(None, "iq".to_string(), None);
+		st.tag(None, "query".to_string(), None);
+		st.tag(None, "extra".to_string(), None);
 		st.reset();
-		st.tag("error".to_string(), None);
+		st.tag(None, "error".to_string(), None);
 
 		assert_eq!(st.root().len(), 2);
 	}

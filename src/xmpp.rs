@@ -1,5 +1,8 @@
 use std::cell::Ref;
+use std::rc::Rc;
 use std::collections::HashMap;
+
+use rxml::CData;
 
 use crate::tree;
 
@@ -38,6 +41,7 @@ pub fn make_reply<'a>(el: Ref<'a, tree::Element>) -> tree::ElementPtr {
 	}
 
 	tree::ElementPtr::new_with_attr(
+		None,
 		el.localname.clone(),
 		Some(attr),
 	)
@@ -45,31 +49,31 @@ pub fn make_reply<'a>(el: Ref<'a, tree::Element>) -> tree::ElementPtr {
 
 pub struct ElementSelector {
 	filter_by_name: bool,
-	name: String,
+	name: Option<String>,
 	allow_absent_xmlns: bool,
 	match_xmlns: bool,
-	xmlns: String,
+	nsuri: Option<Rc<CData>>,
 }
 
 impl ElementSelector {
-	pub fn select_inside_parent<'a>(parent: Ref<'a, tree::Element>, name: Option<String>, xmlns: Option<String>) -> ElementSelector {
-		Self::select_inside_xmlns(parent.attr.get("xmlns"), name, xmlns)
+	pub fn select_inside_parent<'a>(parent: Ref<'a, tree::Element>, name: Option<String>, xmlns: Option<Rc<CData>>) -> ElementSelector {
+		Self::select_inside_xmlns(parent.nsuri.clone(), name, xmlns)
 	}
 
-	pub fn select_inside_xmlns<'a>(default_xmlns: Option<&'a String>, name: Option<String>, xmlns: Option<String>) -> ElementSelector {
+	pub fn select_inside_xmlns<'a>(default_xmlns: Option<Rc<CData>>, name: Option<String>, xmlns: Option<Rc<CData>>) -> ElementSelector {
 		let (filter_by_name, name) = match name {
-			Some(n) => (true, n.clone()),
-			None => (false, "".to_string()),
+			Some(n) => (true, Some(n.clone())),
+			None => (false, None),
 		};
 
 		let (allow_absent_xmlns, match_xmlns, xmlns) = match xmlns {
 			Some(ns) => match default_xmlns {
-				Some(default_ns) => (*default_ns == ns, true, ns.clone()),
-				None => (false, true, ns.clone()),
+				Some(default_ns) => (*default_ns == *ns, true, Some(ns.clone())),
+				None => (false, true, Some(ns.clone())),
 			},
 			None => match default_xmlns {
-				Some(ns) => (true, true, ns.clone()),
-				None => (true, false, "".to_string()),
+				Some(ns) => (true, true, Some(ns.clone())),
+				None => (true, false, None),
 			},
 		};
 
@@ -78,26 +82,26 @@ impl ElementSelector {
 			name: name,
 			allow_absent_xmlns: allow_absent_xmlns,
 			match_xmlns: match_xmlns,
-			xmlns: xmlns,
+			nsuri: xmlns,
 		}
 	}
 
 	pub fn select<'a>(&self, element: Ref<'a, tree::Element>) -> bool {
 		self.select_str(
 			&element.localname,
-			element.attr.get("xmlns"),
+			&element.nsuri,
 		)
 	}
 
-	pub fn select_str<'a>(&self, name: &'a String, xmlns: Option<&'a String>) -> bool {
-		if self.filter_by_name && *name != self.name {
+	pub fn select_str<'a>(&self, name: &'a String, xmlns: &'a Option<Rc<CData>>) -> bool {
+		if self.filter_by_name && name != self.name.as_ref().unwrap() {
 			return false;
 		}
 
 		match xmlns {
 			// xmlns_selector == None && parent.xmlns != None && element.xmlns == parent.xmlns
 			// xmlns_selector != None && element.xmlns == xmlns_selector
-			Some(xmlns) => self.match_xmlns && self.xmlns == *xmlns,
+			Some(xmlns) => self.match_xmlns && self.nsuri.as_ref().unwrap() == xmlns,
 			// xmlns_selector == None && parent.xmlns == None && element.xmlns == None
 			None => self.allow_absent_xmlns,
 		}
@@ -129,9 +133,9 @@ pub fn extract_error_info<'a>(el: Ref<'a, tree::Element>) -> Option<ErrorInfo> {
 
 	for child_el_ptr in el.iter_children() {
 		let child_el = child_el_ptr.borrow();
-		match child_el.attr.get("xmlns") {
+		match child_el.nsuri.as_ref() {
 			Some(ns) => {
-				if ns == XMLNS_XMPP_STANZAS {
+				if **ns == XMLNS_XMPP_STANZAS {
 					if child_el.localname == "text" {
 						text = match child_el.get_text() {
 							Some(s) => Some(s.clone()),
@@ -174,7 +178,7 @@ pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition
 		let err_ptr = {
 			let mut reply = reply_ptr.borrow_mut();
 			reply.attr.insert("type".to_string(), "error".to_string());
-			reply.tag("error".to_string(), None)
+			reply.tag(None, "error".to_string(), None)
 		};
 		let mut err = err_ptr.borrow_mut();
 		err.attr.insert("type".to_string(), type_);
@@ -182,12 +186,15 @@ pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition
 			Some(by) => { err.attr.insert("by".to_string(), by); },
 			_ => (),
 		};
-		err.tag(condition, None).borrow_mut().attr.insert("xmlns".to_string(), XMLNS_XMPP_STANZAS.to_string());
+
+		// this is safe because of the staticness of the string
+		let nsuri = Some(Rc::new(unsafe { CData::from_string_unchecked(XMLNS_XMPP_STANZAS.to_string()) }));
+
+		err.tag(nsuri.clone(), condition, None);
 		match text {
 			Some(text) => {
-				let text_el_ptr = err.tag("text".to_string(), None);
+				let text_el_ptr = err.tag(nsuri.clone(), "text".to_string(), None);
 				let mut text_el = text_el_ptr.borrow_mut();
-				text_el.attr.insert("xmlns".to_string(), XMLNS_XMPP_STANZAS.to_string());
 				text_el.text(text);
 			},
 			_ => (),
@@ -196,7 +203,7 @@ pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition
 	Ok(reply_ptr)
 }
 
-pub fn find_first_child<'a>(el: Ref<'a, tree::Element>, name: Option<String>, xmlns: Option<String>) -> Option<tree::ElementPtr> {
+pub fn find_first_child<'a>(el: Ref<'a, tree::Element>, name: Option<String>, xmlns: Option<Rc<CData>>) -> Option<tree::ElementPtr> {
 	let selector = ElementSelector::select_inside_parent(
 		Ref::clone(&el),
 		name,
@@ -215,57 +222,56 @@ mod tests {
 		result
 	}
 
-	fn mkxmlnsattr(ns: String) -> HashMap<String, String> {
-		let mut result = HashMap::new();
-		result.insert("xmlns".to_string(), ns);
-		result
+	fn mknsuri(s: &'static str) -> Option<Rc<CData>> {
+		Some(Rc::new(CData::from_string(s.to_string()).unwrap()))
 	}
 
 	#[test]
 	fn elementselector_match_by_name() {
 		let sel = ElementSelector::select_inside_xmlns(None, Some("foo".to_string()), None);
-		assert!(sel.select_str(&"foo".to_string(), None));
-		assert!(!sel.select_str(&"bar".to_string(), None));
+		assert!(sel.select_str(&"foo".to_string(), &None));
+		assert!(!sel.select_str(&"bar".to_string(), &None));
 	}
 
 	#[test]
 	fn elementselector_match_by_parent_xmlns() {
-		let sel = ElementSelector::select_inside_xmlns(Some(&"urn:foo".to_string()), None, None);
-		assert!(sel.select_str(&"foo".to_string(), Some(&"urn:foo".to_string())));
-		assert!(sel.select_str(&"foo".to_string(), None));
-		assert!(!sel.select_str(&"foo".to_string(), Some(&"urn:bar".to_string())));
+		let sel = ElementSelector::select_inside_xmlns(mknsuri("urn:foo"), None, None);
+		assert!(sel.select_str(&"foo".to_string(), &mknsuri("urn:foo")));
+		assert!(sel.select_str(&"foo".to_string(), &None));
+		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:bar")));
 	}
 
 	#[test]
 	fn elementselector_match_by_absent_parent_xmlns() {
 		let sel = ElementSelector::select_inside_xmlns(None, None, None);
-		assert!(!sel.select_str(&"foo".to_string(), Some(&"urn:foo".to_string())));
-		assert!(sel.select_str(&"foo".to_string(), None));
-		assert!(!sel.select_str(&"foo".to_string(), Some(&"urn:bar".to_string())));
+		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:foo")));
+		assert!(sel.select_str(&"foo".to_string(), &None));
+		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:bar")));
 	}
 
 	#[test]
 	fn elementselector_match_by_explicit_xmlns() {
-		let sel = ElementSelector::select_inside_xmlns(Some(&"urn:foo".to_string()), None, Some("urn:bar".to_string()));
-		assert!(!sel.select_str(&"foo".to_string(), Some(&"urn:foo".to_string())));
-		assert!(!sel.select_str(&"foo".to_string(), None));
-		assert!(sel.select_str(&"foo".to_string(), Some(&"urn:bar".to_string())));
+		let sel = ElementSelector::select_inside_xmlns(mknsuri("urn:foo"), None, mknsuri("urn:bar"));
+		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:foo")));
+		assert!(!sel.select_str(&"foo".to_string(), &None));
+		assert!(sel.select_str(&"foo".to_string(), &mknsuri("urn:bar")));
 	}
 
 	#[test]
 	fn elementselector_match_by_name_and_xmlns() {
-		let sel = ElementSelector::select_inside_xmlns(Some(&"jabber:client".to_string()), Some("message".to_string()), Some("jabber:client".to_string()));
-		assert!(sel.select_str(&"message".to_string(), Some(&"jabber:client".to_string())));
-		assert!(sel.select_str(&"message".to_string(), None));
-		assert!(!sel.select_str(&"message".to_string(), Some(&"jabber:server".to_string())));
-		assert!(!sel.select_str(&"iq".to_string(), Some(&"jabber:client".to_string())));
-		assert!(!sel.select_str(&"iq".to_string(), None));
-		assert!(!sel.select_str(&"iq".to_string(), Some(&"jabber:server".to_string())));
+		let sel = ElementSelector::select_inside_xmlns(mknsuri("jabber:client"), Some("message".to_string()), mknsuri("jabber:client"));
+		assert!(sel.select_str(&"message".to_string(), &mknsuri("jabber:client")));
+		assert!(sel.select_str(&"message".to_string(), &None));
+		assert!(!sel.select_str(&"message".to_string(), &mknsuri("urn:server")));
+		assert!(!sel.select_str(&"iq".to_string(), &mknsuri("jabber:client")));
+		assert!(!sel.select_str(&"iq".to_string(), &None));
+		assert!(!sel.select_str(&"iq".to_string(), &mknsuri("jabber:server")));
 	}
 
 	#[test]
 	fn extract_error_info_extracts_type_and_defaults_to_undef_condition() {
 		let e = tree::ElementPtr::new_with_attr(
+			None,
 			"error".to_string(),
 			Some(mkerrorattr("error type".to_string())),
 		);
@@ -279,10 +285,11 @@ mod tests {
 	#[test]
 	fn extract_error_info_extracts_type_and_condition() {
 		let e = tree::ElementPtr::new_with_attr(
+			None,
 			"error".to_string(),
 			Some(mkerrorattr("error type".to_string())),
 		);
-		e.borrow_mut().tag("random-condition".to_string(), Some(mkxmlnsattr(XMLNS_XMPP_STANZAS.to_string())));
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".to_string(), None);
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
 		assert_eq!(condition, "random-condition");
@@ -293,11 +300,12 @@ mod tests {
 	#[test]
 	fn extract_error_info_extracts_text() {
 		let e = tree::ElementPtr::new_with_attr(
+			None,
 			"error".to_string(),
 			Some(mkerrorattr("error type".to_string())),
 		);
-		e.borrow_mut().tag("random-condition".to_string(), Some(mkxmlnsattr(XMLNS_XMPP_STANZAS.to_string())));
-		e.borrow_mut().tag("text".to_string(), Some(mkxmlnsattr(XMLNS_XMPP_STANZAS.to_string()))).borrow_mut().text("foobar 2342".to_string());
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".to_string(), None);
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "text".to_string(), None).borrow_mut().text("foobar 2342".to_string());
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
 		assert_eq!(condition, "random-condition");
@@ -308,12 +316,13 @@ mod tests {
 	#[test]
 	fn extract_error_info_extracts_application_defined_condition_el() {
 		let e = tree::ElementPtr::new_with_attr(
+			None,
 			"error".to_string(),
 			Some(mkerrorattr("error type".to_string())),
 		);
-		e.borrow_mut().tag("random-condition".to_string(), Some(mkxmlnsattr(XMLNS_XMPP_STANZAS.to_string())));
-		e.borrow_mut().tag("text".to_string(), Some(mkxmlnsattr(XMLNS_XMPP_STANZAS.to_string()))).borrow_mut().text("foobar 2342".to_string());
-		let appdef_el = e.borrow_mut().tag("appdefcond".to_string(), Some(mkxmlnsattr("urn:uuid:5cf726d1-5be8-44bb-b14a-62880f783ac9".to_string())));
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".to_string(), None);
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "text".to_string(), None).borrow_mut().text("foobar 2342".to_string());
+		let appdef_el = e.borrow_mut().tag(mknsuri("urn:uuid:5cf726d1-5be8-44bb-b14a-62880f783ac9"), "appdefcond".to_string(), None);
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
 		assert_eq!(condition, "random-condition");
@@ -324,12 +333,13 @@ mod tests {
 	#[test]
 	fn extract_error_from_stanza() {
 		let st = tree::ElementPtr::new_with_attr(
+			mknsuri("jabber:client"),
 			"message".to_string(),
-			Some(mkxmlnsattr("jabber:client".to_string())),
+			None,
 		);
 		{
-			let e = st.borrow_mut().tag("error".to_string(), Some(mkerrorattr("wait".to_string())));
-			e.borrow_mut().tag("remote-server-not-found".to_string(), Some(mkxmlnsattr(XMLNS_XMPP_STANZAS.to_string())));
+			let e = st.borrow_mut().tag(None, "error".to_string(), Some(mkerrorattr("wait".to_string())));
+			e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "remote-server-not-found".to_string(), None);
 		}
 
 		let (type_, condition, text, extra) = extract_error(st.borrow()).unwrap();
@@ -342,6 +352,7 @@ mod tests {
 	#[test]
 	fn make_error_reply_sets_error_type() {
 		let st = tree::ElementPtr::new_with_attr(
+			None,
 			"message".to_string(),
 			None,
 		);
@@ -355,6 +366,7 @@ mod tests {
 	#[test]
 	fn extract_error_can_extract_from_make_error_reply_result() {
 		let st = tree::ElementPtr::new_with_attr(
+			None,
 			"message".to_string(),
 			None,
 		);
@@ -371,6 +383,7 @@ mod tests {
 	#[test]
 	fn extract_error_can_extract_from_make_error_reply_result_with_appinfo() {
 		let st = tree::ElementPtr::new_with_attr(
+			None,
 			"message".to_string(),
 			None,
 		);
@@ -379,13 +392,10 @@ mod tests {
 		let reply = reply.unwrap();
 		let custom_condition = {
 			let custom_el_ptr = reply.borrow()[0].as_element_ptr().unwrap().borrow_mut().tag(
+				mknsuri("urn:uuid:23d5821c-0141-418c-aa94-665ae2649b7c"),
 				"custom-condition".to_string(),
 				None,
 			);
-			{
-				let mut custom_el = custom_el_ptr.borrow_mut();
-				custom_el.attr.insert("xmlns".to_string(), "urn:uuid:23d5821c-0141-418c-aa94-665ae2649b7c".to_string());
-			}
 			custom_el_ptr
 		};
 		let (type_, condition, text, extra) = extract_error(reply.borrow()).unwrap();

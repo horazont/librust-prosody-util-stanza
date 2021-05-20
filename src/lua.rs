@@ -2,6 +2,7 @@ use mlua::prelude::*;
 use std::rc::Rc;
 use std::cell::{RefCell, Ref, RefMut};
 use std::collections::HashMap;
+use rxml::CData;
 use crate::stanza;
 use crate::tree;
 use crate::xmpp;
@@ -55,23 +56,44 @@ impl LuaAttrHandle {
 impl LuaUserData for LuaAttrHandle {
 	fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
 		methods.add_meta_method(LuaMetaMethod::Index, |lua, this, index: String| -> LuaResult<LuaValue> {
-			match this.0.borrow().attr.get(&index) {
-				Some(v) => v.clone().to_lua(lua),
-				None => Ok(LuaValue::Nil),
+			if index == "xmlns" {
+				match &this.0.borrow().nsuri {
+					Some(rcptr) => (**rcptr).clone().as_string().to_lua(lua),
+					None => Ok(LuaValue::Nil),
+				}
+			} else {
+				match this.0.borrow().attr.get(&index) {
+					Some(v) => v.clone().to_lua(lua),
+					None => Ok(LuaValue::Nil),
+				}
 			}
 		});
 
 		methods.add_meta_method_mut(LuaMetaMethod::NewIndex, |_, this, (key, value): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
 			let key = convert_attribute_name_from_lua(key)?;
-			match value {
-				LuaValue::Nil => {
-					this.0.borrow_mut().attr.remove(&key);
-					Ok(LuaValue::Nil)
-				},
-				_ => {
-					let value = convert_character_data_from_lua(value)?;
-					this.0.borrow_mut().attr.insert(key, value);
-					Ok(LuaValue::Nil)
+			if key == "xmlns" {
+				match value {
+					LuaValue::Nil => {
+						this.0.borrow_mut().nsuri = None;
+						Ok(LuaValue::Nil)
+					},
+					_ => {
+						let value = convert_cdata_from_lua(value)?;
+						this.0.borrow_mut().nsuri = Some(Rc::new(value));
+						Ok(LuaValue::Nil)
+					}
+				}
+			} else {
+				match value {
+					LuaValue::Nil => {
+						this.0.borrow_mut().attr.remove(&key);
+						Ok(LuaValue::Nil)
+					},
+					_ => {
+						let value = convert_character_data_from_lua(value)?;
+						this.0.borrow_mut().attr.insert(key, value);
+						Ok(LuaValue::Nil)
+					}
 				}
 			}
 		});
@@ -96,16 +118,17 @@ impl LuaNamespacesHandle {
 impl LuaUserData for LuaNamespacesHandle {
 	fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
 		methods.add_meta_method(LuaMetaMethod::Index, |lua, this, index: String| -> LuaResult<LuaValue> {
-			match this.0.borrow().namespaces.get(&index) {
+			/* match this.0.borrow().namespaces.get(&index) {
 				Some(v) => v.clone().to_lua(lua),
-				None => Ok(LuaValue::Nil),
-			}
+				None => */ Ok(LuaValue::Nil) /*,
+			} */
 		});
 
 		methods.add_meta_method(LuaMetaMethod::Eq, |_, this, other: LuaAttrHandle| -> LuaResult<bool> {
-			let this_namespaces = &this.0.borrow().namespaces;
+			/* let this_namespaces = &this.0.borrow().namespaces;
 			let other_namespaces = &other.0.borrow().namespaces;
-			Ok(*this_namespaces == *other_namespaces)
+			Ok(*this_namespaces == *other_namespaces) */
+			Ok(false)
 		});
 	}
 }
@@ -216,7 +239,7 @@ impl LuaChildTagsIteratorState {
 		})))
 	}
 
-	fn wrap_with_selector(el: tree::ElementPtr, name: Option<String>, xmlns: Option<String>) -> LuaChildTagsIteratorState {
+	fn wrap_with_selector(el: tree::ElementPtr, name: Option<String>, xmlns: Option<Rc<CData>>) -> LuaChildTagsIteratorState {
 		let selector = xmpp::ElementSelector::select_inside_parent(el.borrow(), name, xmlns);
 		LuaChildTagsIteratorState(Rc::new(RefCell::new(ChildTagsIteratorState{
 			el: el,
@@ -324,19 +347,16 @@ impl LuaUserData for LuaStanza {
 
 		methods.add_method("tag", |_, this, (name, attr, namespaces): (LuaValue, Option<LuaTable>, Option<LuaTable>)| -> LuaResult<LuaStanza> {
 			let name = convert_element_name_from_lua(name)?;
-			let attr = match attr {
-				Some(tbl) => Some(lua_table_to_attr(tbl)?),
-				None => None,
-			};
+			let (nsuri, attr) = lua_table_to_attr(attr)?;
 			let namespaces = match namespaces {
-				Some(tbl) => Some(lua_table_to_attr(tbl)?),
+				Some(tbl) => Some(lua_table_to_plain_attr(tbl)?),
 				None => None,
 			};
-			match this.0.borrow_mut().tag(name, attr) {
+			match this.0.borrow_mut().tag(nsuri, name, attr) {
 				Some(el) => {
-					if let Some(nss) = namespaces {
+					/* if let Some(nss) = namespaces {
 						el.borrow_mut().namespaces = nss
-					}
+					} */
 					Ok(this.clone())
 				},
 				None => Err(LuaError::RuntimeError("invalid cursor in stanza".to_string())),
@@ -351,12 +371,9 @@ impl LuaUserData for LuaStanza {
 		methods.add_method("text_tag", |_, this, (name, text, attr): (LuaValue, LuaValue, Option<LuaTable>)| -> LuaResult<LuaStanza> {
 			let name = convert_element_name_from_lua(name)?;
 			let text = convert_character_data_from_lua(text)?;
-			let attr = match attr {
-				Some(tbl) => Some(lua_table_to_attr(tbl)?),
-				None => None,
-			};
+			let (nsuri, attr) = lua_table_to_attr(attr)?;
 			let mut this_st = this.0.borrow_mut();
-			match this_st.tag(name, attr) {
+			match this_st.tag(nsuri, name, attr) {
 				Some(new_el) => {
 					new_el.borrow_mut().text(text);
 					this_st.up();
@@ -390,13 +407,18 @@ impl LuaUserData for LuaStanza {
 			}
 		});
 
-		methods.add_method("remove_children", |_, this, (name, xmlns): (Option<String>, Option<String>)| -> LuaResult<LuaStanza> {
+		methods.add_method("remove_children", |_, this, (name, xmlns): (Option<String>, LuaValue)| -> LuaResult<LuaStanza> {
 			let st = this.0.borrow();
 			let root_ptr = st.root_ptr();
+			// TODO: find a way to avoid the CData assertion here, because if the string is not correct CDATA, it does not cause harm.
+			let nsuri = match xmlns {
+				LuaValue::Nil => None,
+				other => Some(Rc::new(convert_cdata_from_lua(other)?)),
+			};
 			let selector = xmpp::ElementSelector::select_inside_parent(
 				root_ptr.borrow(),
 				name,
-				xmlns,
+				nsuri,
 			);
 			let mut el = root_ptr.borrow_mut();
 			let result = el.map_elements::<_, LuaError>(|el| {
@@ -413,19 +435,29 @@ impl LuaUserData for LuaStanza {
 			}
 		});
 
-		methods.add_method("get_child", |lua, this, (name, xmlns): (Option<String>, Option<String>)| -> LuaResult<LuaValue> {
+		methods.add_method("get_child", |lua, this, (name, xmlns): (Option<String>, LuaValue)| -> LuaResult<LuaValue> {
 			let st = this.0.borrow();
 			let root_ptr = st.root_ptr();
-			match xmpp::find_first_child(root_ptr.borrow(), name, xmlns) {
+			// TODO: find a way to avoid the CData assertion here, because if the string is not correct CDATA, it does not cause harm.
+			let nsuri = match xmlns {
+				LuaValue::Nil => None,
+				other => Some(Rc::new(convert_cdata_from_lua(other)?)),
+			};
+			match xmpp::find_first_child(root_ptr.borrow(), name, nsuri) {
 				Some(child_ptr) => LuaStanza::wrap(stanza::Stanza::wrap(child_ptr)).to_lua(lua),
 				None => Ok(LuaValue::Nil)
 			}
 		});
 
-		methods.add_method("get_child_text", |lua, this, (name, xmlns): (Option<String>, Option<String>)| -> LuaResult<LuaValue> {
+		methods.add_method("get_child_text", |lua, this, (name, xmlns): (Option<String>, LuaValue)| -> LuaResult<LuaValue> {
 			let st = this.0.borrow();
 			let root_ptr = st.root_ptr();
-			match xmpp::find_first_child(root_ptr.borrow(), name, xmlns) {
+			// TODO: find a way to avoid the CData assertion here, because if the string is not correct CDATA, it does not cause harm.
+			let nsuri = match xmlns {
+				LuaValue::Nil => None,
+				other => Some(Rc::new(convert_cdata_from_lua(other)?)),
+			};
+			match xmpp::find_first_child(root_ptr.borrow(), name, nsuri) {
 				Some(child_ptr) => {
 					match child_ptr.borrow().get_text() {
 						Some(s) => s.to_lua(lua),
@@ -447,18 +479,21 @@ impl LuaUserData for LuaStanza {
 		});
 
 		methods.add_method("query", |_, this, xmlns: LuaValue| -> LuaResult<LuaStanza> {
-			let xmlns = convert_character_data_from_lua(xmlns)?;
+			let xmlns = convert_cdata_from_lua(xmlns)?;
 			let mut st = this.0.borrow_mut();
-			let mut attr = HashMap::new();
-			attr.insert("xmlns".to_string(), xmlns.to_string());
-			st.tag("query".to_string(), Some(attr));
+			st.tag(Some(Rc::new(xmlns)), "query".to_string(), None);
 			Ok(this.clone())
 		});
 
-		methods.add_method("childtags", |lua, this, (name, xmlns): (Option<String>, Option<String>)| -> LuaResult<(LuaValue, LuaChildTagsIteratorState)> {
+		methods.add_method("childtags", |lua, this, (name, xmlns): (Option<String>, LuaValue)| -> LuaResult<(LuaValue, LuaChildTagsIteratorState)> {
 			let st = this.0.borrow();
 			let root_ptr = st.root_ptr();
-			let iterator = LuaChildTagsIteratorState::wrap_with_selector(root_ptr, name, xmlns);
+			// TODO: find a way to avoid the CData assertion here, because if the string is not correct CDATA, it does not cause harm.
+			let nsuri = match xmlns {
+				LuaValue::Nil => None,
+				other => Some(Rc::new(convert_cdata_from_lua(other)?)),
+			};
+			let iterator = LuaChildTagsIteratorState::wrap_with_selector(root_ptr, name, nsuri);
 			Ok((lua.create_function(|_, state: LuaChildTagsIteratorState| -> LuaResult<Option<LuaStanza>> {
 				let mut state = state.borrow_mut();
 				loop {
@@ -598,27 +633,21 @@ impl LuaUserData for LuaStanza {
 
 pub fn stanza_new<'l>(_: &'l Lua, (name, attr): (LuaValue, Option<LuaTable>)) -> LuaResult<LuaStanza> {
 	let name = convert_element_name_from_lua(name)?;
-	let attr = match attr {
-		Some(tbl) => Some(lua_table_to_attr(tbl)?),
-		None => None,
-	};
+	let (nsuri, attr) = lua_table_to_attr(attr)?;
 	Ok(LuaStanza::wrap(
-		stanza::Stanza::new(name, attr),
+		stanza::Stanza::new(nsuri, name, attr),
 	))
 }
 
 pub fn stanza_message<'l>(_: &'l Lua, (attr, body): (Option<LuaTable>, LuaValue)) -> LuaResult<LuaStanza> {
-	let attr = match attr {
-		Some(tbl) => Some(lua_table_to_attr(tbl)?),
-		None => None,
-	};
+	let (nsuri, attr) = lua_table_to_attr(attr)?;
 
 	let body = convert_optional_character_data_from_lua(body)?;
 
-	let mut st = stanza::Stanza::new("message".to_string(), attr);
+	let mut st = stanza::Stanza::new(nsuri.clone(), "message".to_string(), attr);
 	match body {
 		Some(s) => {
-			st.tag("body".to_string(), None);
+			st.tag(nsuri, "body".to_string(), None);
 			st.text(s);
 			st.up();
 		},
@@ -628,8 +657,9 @@ pub fn stanza_message<'l>(_: &'l Lua, (attr, body): (Option<LuaTable>, LuaValue)
 }
 
 pub fn stanza_iq<'l>(_: &'l Lua, attr: Option<LuaTable>) -> LuaResult<LuaStanza> {
+	let (nsuri, attr) = lua_table_to_attr(attr)?;
 	let attr = match attr {
-		Some(tbl) => lua_table_to_attr(tbl)?,
+		Some(attr) => attr,
 		None => return Err(LuaError::RuntimeError("iq stanzas require id and type attributes".to_string())),
 	};
 
@@ -642,18 +672,15 @@ pub fn stanza_iq<'l>(_: &'l Lua, attr: Option<LuaTable>) -> LuaResult<LuaStanza>
 	}
 
 	Ok(LuaStanza::wrap(stanza::Stanza::new(
-		"iq".to_string(), Some(attr),
+		nsuri, "iq".to_string(), Some(attr),
 	)))
 }
 
 pub fn stanza_presence<'l>(_: &'l Lua, attr: Option<LuaTable>) -> LuaResult<LuaStanza> {
-	let attr = match attr {
-		Some(tbl) => Some(lua_table_to_attr(tbl)?),
-		None => None,
-	};
+	let (nsuri, attr) = lua_table_to_attr(attr)?;
 
 	Ok(LuaStanza::wrap(stanza::Stanza::new(
-		"presence".to_string(), attr,
+		nsuri, "presence".to_string(), attr,
 	)))
 }
 
@@ -696,17 +723,17 @@ fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::E
 		},
 		_ => {
 			extra.get::<_, LuaValue>("namespace").and_then(|nsv| {
-				convert_character_data_from_lua(nsv)
+				convert_cdata_from_lua(nsv)
 			}).and_then(|ns| {
 				Ok((ns, extra.get::<_, LuaValue>("condition").and_then(|cv| {
 					convert_element_name_from_lua(cv)
 				})?))
 			}).and_then(|(ns, condition)| {
-				let el = error.tag(
+				error.tag(
+					Some(Rc::new(ns)),
 					condition,
 					None,
 				);
-				el.borrow_mut().attr.insert("xmlns".to_string(), ns);
 				Ok(())
 			}).ok();
 		}

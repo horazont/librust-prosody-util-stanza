@@ -1,8 +1,8 @@
 use mlua::prelude::*;
 
-mod tree;
+pub mod tree;
 mod path;
-mod stanza;
+pub mod stanza;
 mod validation;
 mod lua;
 mod xmpp;
@@ -27,13 +27,13 @@ fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
 	stanza.set("clone", lua.create_function(lua::stanza_clone)?)?;
 	stanza.set("preserialize", lua.create_function(lua::stanza_preserialize)?)?;
 	stanza.set("deserialize", lua.create_function(lua::stanza_deserialize)?)?;
-	exports.set("stanza", stanza);
+	exports.set("stanza", stanza)?;
 
 	let xmppstream = lua.create_table()?;
 	xmppstream.set("new", lua.create_function(stream::lua::stream_new)?)?;
-	xmppstream.set("ns_separator", "\x01");
-	xmppstream.set("ns_pattern", "^([^\x01]*)\x01?(.*)$");
-	exports.set("xmppstream", xmppstream);
+	xmppstream.set("ns_separator", "\x01")?;
+	xmppstream.set("ns_pattern", "^([^\x01]*)\x01?(.*)$")?;
+	exports.set("xmppstream", xmppstream)?;
 
 	Ok(exports)
 }

@@ -1,6 +1,9 @@
 use mlua::prelude::*;
 use std::borrow::Cow;
+use std::rc::Rc;
 use std::collections::HashMap;
+
+use rxml::CData;
 
 use crate::validation;
 
@@ -37,6 +40,18 @@ pub fn convert_character_data_from_lua(v: LuaValue) -> LuaResult<String> {
 	}
 }
 
+pub fn convert_cdata_from_lua(v: LuaValue) -> LuaResult<CData> {
+	let raw = strict_string_from_lua(&v)?;
+	let s = match String::from_utf8(raw.to_vec()) {
+		Ok(s) => s,
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid utf-8: {}", e))),
+	};
+	match CData::from_string(s) {
+		Ok(s) => Ok(s),
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid cdata/text: {}", e))),
+	}
+}
+
 pub fn convert_optional_character_data_from_lua(v: LuaValue) -> LuaResult<Option<String>> {
 	match v {
 		LuaValue::Nil => Ok(None),
@@ -51,7 +66,7 @@ pub fn convert_optional_character_data_from_lua(v: LuaValue) -> LuaResult<Option
 	}
 }
 
-pub fn lua_table_to_attr(tbl: LuaTable) -> LuaResult<HashMap<String, String>> {
+pub fn lua_table_to_plain_attr(tbl: LuaTable) -> LuaResult<HashMap<String, String>> {
 	let mut result = HashMap::new();
 	for pair in tbl.pairs::<LuaValue, LuaValue>() {
 		let (key, value) = pair?;
@@ -60,4 +75,24 @@ pub fn lua_table_to_attr(tbl: LuaTable) -> LuaResult<HashMap<String, String>> {
 		result.insert(key, value);
 	}
 	Ok(result)
+}
+
+pub fn lua_table_to_attr(tbl: Option<LuaTable>) -> LuaResult<(Option<Rc<CData>>, Option<HashMap<String, String>>)> {
+	if let Some(tbl) = tbl {
+		let mut result = HashMap::new();
+		let mut nsuri = None;
+		for pair in tbl.pairs::<LuaValue, LuaValue>() {
+			let (key, value) = pair?;
+			let key = convert_attribute_name_from_lua(key)?;
+			if key == "xmlns" {
+				nsuri = Some(Rc::new(convert_cdata_from_lua(value)?));
+			} else {
+				let value = convert_character_data_from_lua(value)?;
+				result.insert(key, value);
+			}
+		}
+		Ok((nsuri, Some(result)))
+	} else {
+		Ok((None, None))
+	}
 }

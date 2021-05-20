@@ -64,7 +64,7 @@ pub enum Event {
 		from: Option<rxml::CData>,
 		to: Option<rxml::CData>,
 		id: Option<rxml::CData>,
-		version: rxml::CData,
+		version: Option<rxml::CData>,
 	},
 	/// root element
 	Stanza(stanza::Stanza),
@@ -248,40 +248,42 @@ impl<'x> XMPPStream<'x> {
 						}
 					}
 				}
-				if let Some(version) = version {
-					self.is_open = true;
-					account_bytes(&mut self.pending_bytes, em.len());
-					Ok(ProcResult::Event(Event::Opened{
-						lang: lang,
-						from: from,
-						id: id,
-						to: to,
-						version: version,
-					}))
-				} else {
-					// TODO: need better error messages for these
-					return Err(Error::InvalidStreamHeader)
-				}
+				self.is_open = true;
+				account_bytes(&mut self.pending_bytes, em.len());
+				Ok(ProcResult::Event(Event::Opened{
+					lang: lang,
+					from: from,
+					id: id,
+					to: to,
+					version: version,
+				}))
 			},
 			(rxml::Event::StartElement(em, (nsuri, localname), attrs), true, st_opt) => {
 				let mut converted_attrs = convert_attrs(attrs);
-				let nsuri = nsuri.as_ref().and_then(|v| { Some(Borrow::<rxml::CData>::borrow(v).clone().as_string()) }).unwrap_or_else(|| { "".to_string() });
-				if nsuri != *self.cfg.default_namespace || self.non_streamns_depth > 0 {
-					converted_attrs.insert("xmlns".to_string(), nsuri);
-					self.non_streamns_depth = match self.non_streamns_depth.checked_add(1) {
-						None => return Err(Error::ParserError(rxml::Error::RestrictedXml("nested too deep"))),
-						Some(v) => v,
-					};
-				}
+				let nsuri = match nsuri {
+					None => None,
+					Some(nsuri) => {
+						if **nsuri != *self.cfg.default_namespace || self.non_streamns_depth > 0 {
+							self.non_streamns_depth = match self.non_streamns_depth.checked_add(1) {
+								None => return Err(Error::ParserError(rxml::Error::RestrictedXml("nested too deep"))),
+								Some(v) => v,
+							};
+							Some(nsuri)
+						} else {
+							None
+						}
+					}
+				};
 
 				match st_opt {
 					Some(st) => {
 						accum_bytes(&mut self.stanza_size, em.len())?;
-						st.tag(localname.as_string(), Some(converted_attrs));
+						st.tag(nsuri, localname.as_string(), Some(converted_attrs));
 						Ok(ProcResult::NeedMore)
 					},
 					None => {
 						let stanza = stanza::Stanza::new(
+							nsuri,
 							localname.to_string(),
 							Some(converted_attrs),
 						);
@@ -321,9 +323,12 @@ impl<'x> XMPPStream<'x> {
 					account_bytes(&mut self.pending_bytes, self.stanza_size);
 
 					let swap = swap.unwrap();
-					if swap.root().localname == self.cfg.error_localname && swap.root().attr.get("xmlns").and_then(|v| { Some(v.as_str()) }).unwrap_or("") == self.cfg.stream_namespace.as_str() {
+					let root = swap.root();
+					if root.localname == self.cfg.error_localname && root.nsuri.as_ref().and_then(|v| { Some(**v == self.cfg.stream_namespace.as_str()) }).unwrap_or(false) {
+						drop(root);
 						Ok(ProcResult::Event(Event::Error(swap)))
 					} else {
+						drop(root);
 						Ok(ProcResult::Event(Event::Stanza(swap)))
 					}
 				} else {
@@ -393,18 +398,19 @@ mod tests {
 
 	#[test]
 	fn xmppstream_read_stream_header() {
-		let data = &b"<?xml version='1.0'?><stream:stream id='foobar2342' from='capulet.example' to='montague.example' xml:lang='en' xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server'><iq/>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream id='foobar2342' from='capulet.example' to='montague.example' xml:lang='en' xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server' version='1.0'><iq/>"[..];
 		let mut s = XMPPStream::new(StreamConfig::s2s());
 		s.feed(data).unwrap();
 		assert_eq!(s.pending_bytes, data.len());
 		let ev = s.read().unwrap().unwrap();
 		assert_eq!(s.pending_bytes, 5);
 		match ev {
-			Event::Opened{id, from, to, lang} => {
+			Event::Opened{id, from, to, lang, version} => {
 				assert_eq!(id.unwrap(), "foobar2342");
 				assert_eq!(from.unwrap(), "capulet.example");
 				assert_eq!(to.unwrap(), "montague.example");
 				assert_eq!(lang.unwrap(), "en");
+				assert_eq!(version.unwrap(), "1.0");
 			},
 			other => panic!("unexpected event: {:?}", other),
 		}
@@ -425,7 +431,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_read_stanza_with_attributes_and_child() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'><query xmlns='http://jabber.org/protocol/disco#info'/></iq>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server' version='1.0'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'><query xmlns='http://jabber.org/protocol/disco#info'/></iq>"[..];
 		let mut s = XMPPStream::new(StreamConfig::s2s());
 		s.feed(data).unwrap();
 		assert_eq!(s.pending_bytes, data.len());
@@ -447,8 +453,9 @@ mod tests {
 
 				let q_ptr = root[0].as_element_ptr().unwrap();
 				let q = q_ptr.borrow();
+				assert_eq!(**q.nsuri.as_ref().unwrap(), "http://jabber.org/protocol/disco#info");
 				assert_eq!(q.localname, "query");
-				assert_eq!(q.attr.get(&"xmlns".to_string()).unwrap(), "http://jabber.org/protocol/disco#info");
+				assert_eq!(q.attr.len(), 0);
 			},
 			other => panic!("unexpected event: {:?}", other),
 		}
@@ -456,7 +463,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_read_stanza_with_attributes_and_child_and_text() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server'><message id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example'><body>oh romeo I don\xe2\x80\x99t know my lines!</body></message>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server' version='1.0'><message id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example'><body>oh romeo I don\xe2\x80\x99t know my lines!</body></message>"[..];
 		let mut s = XMPPStream::new(StreamConfig::s2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -483,7 +490,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_read_stanza_sets_stream_xmlns_on_children_below_foreign_ns() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'><message id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example'><forwarded xmlns='carbons'><message xmlns='jabber:client'></message></forwarded></message>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'><message id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example'><forwarded xmlns='carbons'><message xmlns='jabber:client'></message></forwarded></message>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -500,9 +507,10 @@ mod tests {
 				let fwd_ptr = root[0].as_element_ptr().unwrap();
 				let msg_ptr = fwd_ptr.borrow()[0].as_element_ptr().unwrap();
 				let msg = msg_ptr.borrow();
-				assert_eq!(msg.localname, "message");
 				// we want the xmlns on the stanza and its direct same-namespace children to be None
-				assert_eq!(msg.attr.get(&"xmlns".to_string()).unwrap(), "jabber:client");
+				assert_eq!(**msg.nsuri.as_ref().unwrap(), "jabber:client");
+				assert_eq!(msg.localname, "message");
+				assert_eq!(msg.attr.len(), 0);
 			},
 			other => panic!("unexpected event: {:?}", other),
 		}
@@ -510,7 +518,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_footer() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'></stream:stream>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'></stream:stream>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -524,7 +532,7 @@ mod tests {
 	#[test]
 	fn xmppstream_maps_xml_attributes() {
 		// explicit compat with what prosody does
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'><iq xml:lang='en'/>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'><iq xml:lang='en'/>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -543,7 +551,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_accepts_and_ignores_stream_level_whitespace() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>    <iq/>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'>    <iq/>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -560,7 +568,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_rejects_stream_level_text() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>    foobar<iq/>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'>    foobar<iq/>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -573,7 +581,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_enforces_stanza_size_limit() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -587,7 +595,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_rejects_additional_data_or_read_after_poison_error() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		s.read().unwrap().unwrap();
@@ -607,7 +615,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_rejects_additional_data_after_xml_error() {
-		let data = &b"<?xml version='1.0'?><stream:streamxmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'>"[..];
+		let data = &b"<?xml version='1.0'?><stream:streamxmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'><iq id='foobar2342' from='juliet@capulet.example' to='romeo@montague.example' type='get'>"[..];
 		let mut s = XMPPStream::new(StreamConfig::c2s());
 		s.feed(data).unwrap();
 		let e = s.read().err().unwrap();
@@ -635,7 +643,7 @@ mod tests {
 
 	#[test]
 	fn xmppstream_read_stream_error() {
-		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server'><stream:error><not-well-formed xmlns='urn:ietf:params:xml:ns:xmpp-streams'/></stream:error>"[..];
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:server' version='1.0'><stream:error><not-well-formed xmlns='urn:ietf:params:xml:ns:xmpp-streams'/></stream:error>"[..];
 		let mut s = XMPPStream::new(StreamConfig::s2s());
 		s.feed(data).unwrap();
 		assert_eq!(s.pending_bytes, data.len());
@@ -645,13 +653,54 @@ mod tests {
 			Event::Error(st) => {
 				println!("stream error: {:?}", st);
 				let root = st.root();
+				assert_eq!(**root.nsuri.as_ref().unwrap(), XMLNS_STREAMS);
 				assert_eq!(root.localname, "error");
-				assert_eq!(root.attr.get(&"xmlns".to_string()).unwrap(), XMLNS_STREAMS);
 
 				let e_ptr = root[0].as_element_ptr().unwrap();
 				let e = e_ptr.borrow();
+				assert_eq!(**e.nsuri.as_ref().unwrap(), "urn:ietf:params:xml:ns:xmpp-streams");
 				assert_eq!(e.localname, "not-well-formed");
-				assert_eq!(e.attr.get(&"xmlns".to_string()).unwrap(), "urn:ietf:params:xml:ns:xmpp-streams");
+			},
+			other => panic!("unexpected event: {:?}", other),
+		}
+	}
+
+	#[test]
+	fn xmppstream_read_stanza_with_complex_namespacing() {
+		let data = &b"<?xml version='1.0'?><stream:stream xmlns:stream='streamns' xmlns='stanzans'><x xmlns:a='b'><y xmlns:a='c'><a:z/></y><a:z/></x>"[..];
+		let mut s = XMPPStream::new(StreamConfig{
+			default_namespace: Rc::new(rxml::CData::from_string("stanzans".to_string()).unwrap()),
+			stream_namespace: Rc::new(rxml::CData::from_string("streamns".to_string()).unwrap()),
+			stream_localname: "stream".to_string(),
+			error_localname: "error".to_string(),
+		});
+		s.feed(data).unwrap();
+		assert_eq!(s.pending_bytes, data.len());
+		s.read().unwrap().unwrap();
+		let ev = s.read().unwrap().unwrap();
+		match ev {
+			Event::Stanza(st) => {
+				println!("stanza: {:?}", st);
+				let root = st.root();
+				assert_eq!(root.localname, "x");
+				assert!(root.nsuri.is_none());
+
+				let c_ptr = root[0].as_element_ptr().unwrap();
+				let c = c_ptr.borrow();
+				assert!(c.nsuri.is_none());
+				assert_eq!(c.localname, "y");
+
+				{
+					let cc_ptr = c[0].as_element_ptr().unwrap();
+					let cc = cc_ptr.borrow();
+					assert_eq!(**cc.nsuri.as_ref().unwrap(), "c");
+					assert_eq!(cc.localname, "z");
+				}
+
+				let c_ptr = root[1].as_element_ptr().unwrap();
+				let c = c_ptr.borrow();
+				assert_eq!(**c.nsuri.as_ref().unwrap(), "b");
+				assert_eq!(c.localname, "z");
 			},
 			other => panic!("unexpected event: {:?}", other),
 		}

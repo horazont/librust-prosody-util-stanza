@@ -48,10 +48,11 @@ impl Deserialize for tree::ElementPtr {
 	fn deserialize<'l>(lua: &'l Lua, value: LuaValue<'l>) -> LuaResult<Self> {
 		let value = LuaTable::from_lua(value, lua)?;
 		let name = convert_element_name_from_lua(value.get::<_, LuaValue>("name")?)?;
-		let attr = lua_table_to_attr(value.get::<_, LuaTable>("attr")?)?;
+		let (nsuri, attr) = lua_table_to_attr(Some(value.get::<_, LuaTable>("attr")?))?;
 		let el = tree::ElementPtr::new_with_attr(
+			nsuri,
 			name,
-			Some(attr),
+			attr,
 		);
 		let mut numindex = 1usize;
 		{
