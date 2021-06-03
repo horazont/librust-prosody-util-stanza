@@ -68,6 +68,9 @@ pub fn head_as_str<'a>(el: Ref<'a, tree::Element>) -> Result<String, fmt::Error>
 	let mut nsid = 0usize;
 	let mut result = String::new();
 	write!(result, "<{}", el.localname)?;
+	if let Some(nsuri) = el.nsuri.as_ref() {
+		attr_escape(&mut result, "xmlns", nsuri.as_str(), &mut nsid)?;
+	}
 	for (k, v) in el.attr.iter() {
 		attr_escape(&mut result, k, v, &mut nsid)?;
 	}
@@ -138,13 +141,20 @@ impl<'a> FormatterState<'a> {
 	{
 		write!(f, "<{}", el.localname)?;
 		let mut nsid = 0usize;
-		if self.parent_ns != el.nsuri {
+		let assumed_nsuri = if self.parent_ns != el.nsuri {
 			if let Some(nsuri) = el.nsuri.as_ref() {
 				attr_escape(f, "xmlns", nsuri.as_str(), &mut nsid)?;
+				el.nsuri.clone()
+			} else if let Some(nsuri) = self.parent_ns.as_ref() {
+				// XXX: we use the parent uri here, because prosody does not distinguish between that and uses more of a physical representation in its attributes.
+				attr_escape(f, "xmlns", nsuri.as_str(), &mut nsid)?;
+				self.parent_ns.clone()
 			} else {
-				attr_escape(f, "xmlns", "", &mut nsid)?;
+				None
 			}
-		}
+		} else {
+			el.nsuri.clone()
+		};
 		for (k, v) in el.attr.iter() {
 			attr_escape(f, k, v, &mut nsid)?;
 		}
@@ -159,7 +169,7 @@ impl<'a> FormatterState<'a> {
 			} else {
 				self.indent();
 				for child in el.iter() {
-					self.parent_ns = el.nsuri.clone();
+					self.parent_ns = assumed_nsuri.clone();
 					if let tree::Node::Text(ref s) = child {
 						// whitespace-only children are ignored
 						if self.formatter.indent.is_some() && s.find(|c| { !char::is_whitespace(c) }).is_none() {
@@ -175,7 +185,7 @@ impl<'a> FormatterState<'a> {
 		} else {
 			f.write_str(">")?;
 			for child in el.iter() {
-				self.parent_ns = el.nsuri.clone();
+				self.parent_ns = assumed_nsuri.clone();
 				self.format_node(child, f)?;
 			}
 		}
