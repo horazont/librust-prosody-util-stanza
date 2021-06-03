@@ -3,7 +3,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::fmt::Write;
 use rxml::CData;
-use crate::tree;
+use super::tree;
 
 const SPECIALS: &'static [char] = &[
 	'"',

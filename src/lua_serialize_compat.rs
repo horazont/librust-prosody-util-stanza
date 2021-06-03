@@ -1,7 +1,7 @@
 use mlua::prelude::*;
 use std::collections::HashMap;
 
-use crate::tree;
+use crate::stanza::tree;
 use crate::lua_convert::*;
 
 pub trait Preserialize {

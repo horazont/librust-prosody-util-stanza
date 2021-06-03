@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use rxml::CData;
 
-use crate::tree;
+use super::tree;
 
 pub const XMLNS_XMPP_STANZAS: &str = "urn:ietf:params:xml:ns:xmpp-stanzas";
 

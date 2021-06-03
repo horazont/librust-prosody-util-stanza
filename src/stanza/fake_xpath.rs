@@ -1,8 +1,8 @@
 use std::cell::Ref;
 use std::rc::Rc;
 use rxml::CData;
-use crate::tree;
-use crate::xmpp;
+use super::tree;
+use super::xmpp;
 
 pub fn find<'a>(root: Ref<'a, tree::Element>, path: &str) -> Option<tree::Node> {
 	let mut xmlns: Option<Rc<CData>> = None;
@@ -53,7 +53,7 @@ pub fn find<'a>(root: Ref<'a, tree::Element>, path: &str) -> Option<tree::Node> 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::stanza;
+	use super::super::stanza;
 	use std::rc::Rc;
 	use rxml::CData;
 

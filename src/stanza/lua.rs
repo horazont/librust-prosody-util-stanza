@@ -3,11 +3,12 @@ use std::rc::Rc;
 use std::cell::{RefCell, Ref, RefMut};
 use std::collections::HashMap;
 use rxml::CData;
-use crate::stanza;
-use crate::tree;
-use crate::xmpp;
-use crate::fake_xpath;
-use crate::xml;
+
+use super::stanza;
+use super::tree;
+use super::xmpp;
+use super::fake_xpath;
+use super::xml;
 use crate::lua_convert::*;
 use crate::lua_serialize_compat::{Preserialize, Deserialize};
 

@@ -5,8 +5,8 @@ use std::fmt;
 
 use rxml::CData;
 
-use crate::tree;
-use crate::path;
+use super::tree;
+use super::path;
 
 #[derive(PartialEq)]
 pub struct Stanza {

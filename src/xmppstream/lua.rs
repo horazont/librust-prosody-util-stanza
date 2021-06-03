@@ -3,7 +3,6 @@ use std::rc::Rc;
 use super::stream;
 use std::io;
 use bstr::BString;
-use crate::lua;
 use crate::stanza;
 
 const IDX_SESSION: u32 = 1u32;
@@ -63,7 +62,7 @@ fn cb_error_or_ret<'l>(cbtbl: &LuaTable<'l>, session: &LuaValue, errstr: &'stati
 		Some(cb) => cb,
 	};
 	match st {
-		Some(st) => cb.call::<_, LuaValue>((session.clone(), errstr.to_string(), lua::LuaStanza::wrap(st)))?,
+		Some(st) => cb.call::<_, LuaValue>((session.clone(), errstr.to_string(), stanza::lua::LuaStanza::wrap(st)))?,
 		None => match Some(extra) {
 			Some(extra) => cb.call::<_, LuaValue>((session.clone(), errstr.to_string(), extra))?,
 			None => cb.call::<_, LuaValue>((session.clone(), errstr.to_string()))?,
@@ -143,7 +142,7 @@ impl<'l> LuaUserData for ProsodyXmppStream<'l> {
 					stream::Event::Stanza(st) => {
 						let cb = cbtbl.get::<_, LuaFunction>(IDX_STANZA).unwrap();
 						drop(stream);
-						cb.call::<_, LuaValue>((session.clone(), lua::LuaStanza::wrap(st)))?;
+						cb.call::<_, LuaValue>((session.clone(), stanza::lua::LuaStanza::wrap(st)))?;
 					},
 					stream::Event::Error(st) => {
 						drop(stream);

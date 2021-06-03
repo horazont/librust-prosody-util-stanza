@@ -1,4 +1,4 @@
-use crate::tree;
+use super::tree;
 
 #[derive(Clone, PartialEq)]
 pub struct ElementPath(Vec<usize>);
