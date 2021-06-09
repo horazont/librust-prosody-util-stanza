@@ -21,6 +21,7 @@ fn capture_callbacks<'l>(l: &'l Lua, tbl: &LuaTable<'l>) -> LuaResult<LuaTable<'
 }
 
 fn capture_stream_config<'l>(tbl: &LuaTable<'l>) -> LuaResult<stream::StreamConfig> {
+	let ctx = tbl.get::<_, Option<ProsodyXmlContext>>("ctx")?.and_then(|v| { Some(v.0) }).unwrap_or_else(|| { Rc::new(rxml::Context::new()) });
 	let stream_ns = rxml::CData::from_string(tbl.get::<_, Option<String>>("stream_ns")?.unwrap_or_else(|| { stream::XMLNS_STREAMS.to_string() })).unwrap();
 	let stream_localname = tbl.get::<_, Option<String>>("stream_tag")?.unwrap_or_else(|| { "stream".to_string() });
 	let error_localname = tbl.get::<_, Option<String>>("error_tag")?.unwrap_or_else(|| { "error".to_string() });
@@ -29,8 +30,9 @@ fn capture_stream_config<'l>(tbl: &LuaTable<'l>) -> LuaResult<stream::StreamConf
 	Ok(stream::StreamConfig{
 		stream_localname: stream_localname,
 		error_localname: error_localname,
-		default_namespace: Rc::new(default_ns),
-		stream_namespace: Rc::new(stream_ns),
+		default_namespace: ctx.intern_cdata(default_ns),
+		stream_namespace: ctx.intern_cdata(stream_ns),
+		init_ctx: Some(ctx),
 	})
 }
 
@@ -69,6 +71,34 @@ fn cb_error_or_ret<'l>(cbtbl: &LuaTable<'l>, session: &LuaValue, errstr: &'stati
 		}
 	};
 	Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ProsodyXmlContext(Rc<rxml::Context>);
+
+impl LuaUserData for ProsodyXmlContext {
+	fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+		methods.add_method("release_temporaries", |l: &'lua Lua, this: &ProsodyXmlContext, _: ()| -> LuaResult<()> {
+			this.0.release_temporaries();
+			Ok(())
+		});
+
+		methods.add_meta_method(LuaMetaMethod::ToString, |l: &'lua Lua, this: &ProsodyXmlContext, _: ()| -> LuaResult<String> {
+			Ok(format!("{:?}", this.0))
+		});
+
+		methods.add_method("get_cdatas", |l: &'lua Lua, this: &ProsodyXmlContext, _: ()| -> LuaResult<usize> {
+			Ok(this.0.cdatas())
+		});
+
+		methods.add_method("get_cdata_capacity", |l: &'lua Lua, this: &ProsodyXmlContext, _: ()| -> LuaResult<usize> {
+			Ok(this.0.cdata_capacity())
+		});
+
+		methods.add_method("dump", |l: &'lua Lua, this: &ProsodyXmlContext, _: ()| -> LuaResult<String> {
+			Ok(format!("{:X}", *this.0))
+		});
+	}
 }
 
 #[derive(Debug)]
@@ -156,8 +186,22 @@ impl<'l> LuaUserData for ProsodyXmppStream<'l> {
 			this.stream = stream::XMPPStream::new(this.stream.cfg().clone());
 			Ok(())
 		});
+
+		methods.add_method_mut("release_temporaries", |l: &'lua Lua, this: &mut ProsodyXmppStream, _: ()| -> LuaResult<()> {
+			this.stream.release_temporaries();
+			Ok(())
+		});
+
+		methods.add_meta_method(LuaMetaMethod::ToString, |l: &'lua Lua, this: &ProsodyXmppStream, _: ()| -> LuaResult<String> {
+			Ok(format!("{:?}", this))
+		});
 	}
 }
+
+pub fn ctx_new<'l>(l: &'l Lua, (): ()) -> LuaResult<LuaValue<'l>> {
+	ProsodyXmlContext(Rc::new(rxml::Context::new())).to_lua(l)
+}
+
 
 pub fn stream_new<'l>(l: &'l Lua, (session, tbl, size_limit): (LuaValue, LuaTable<'l>, Option<usize>)) -> LuaResult<LuaValue<'l>> {
 	let cbtbl = capture_callbacks(l, &tbl)?;

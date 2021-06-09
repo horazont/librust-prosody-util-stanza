@@ -80,15 +80,25 @@ enum ProcResult {
 	Event(Event),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub struct StreamConfig {
 	pub stream_namespace: Rc<rxml::CData>,
 	pub default_namespace: Rc<rxml::CData>,
 	pub stream_localname: String,
 	pub error_localname: String,
+	pub init_ctx: Option<Rc<rxml::Context>>,
 }
 
-impl Eq for StreamConfig {}
+impl fmt::Debug for StreamConfig {
+	fn fmt<'f>(&self, f: &'f mut fmt::Formatter) -> fmt::Result {
+		f.debug_struct("StreamConfig")
+			.field("stream_namespace", &(&*self.stream_namespace as *const rxml::CData, &*self.stream_namespace))
+			.field("default_namespace", &(&*self.default_namespace as *const rxml::CData, &*self.default_namespace))
+			.field("stream_localname", &self.stream_localname)
+			.field("error_localname", &self.error_localname)
+			.finish()
+	}
+}
 
 impl StreamConfig {
 	pub fn c2s() -> StreamConfig {
@@ -97,6 +107,7 @@ impl StreamConfig {
 			default_namespace: Rc::new(rxml::CData::from_str("jabber:client").unwrap()),
 			stream_localname: "stream".to_string(),
 			error_localname: "error".to_string(),
+			init_ctx: None,
 		}
 	}
 
@@ -106,6 +117,7 @@ impl StreamConfig {
 			default_namespace: Rc::new(rxml::CData::from_str("jabber:server").unwrap()),
 			stream_localname: "stream".to_string(),
 			error_localname: "error".to_string(),
+			init_ctx: None,
 		}
 	}
 }
@@ -181,9 +193,15 @@ fn accum_bytes(accum: &mut usize, add: usize) -> Result<()> {
 
 impl<'x> XMPPStream<'x> {
 	// TODO: options!
-	pub fn new<'a>(cfg: StreamConfig) -> XMPPStream<'a> {
+	pub fn new<'a>(mut cfg: StreamConfig) -> XMPPStream<'a> {
+		let mut ctx: Option<Rc<rxml::Context>> = None;
+		// no need to preserve a reference to the context in the cfg, too
+		std::mem::swap(&mut cfg.init_ctx, &mut ctx);
 		XMPPStream{
-			p: rxml::FeedParser::new(),
+			p: match ctx {
+				Some(ctx) => rxml::FeedParser::with_context(ctx),
+				None => rxml::FeedParser::new(),
+			},
 			is_open: false,
 			stanza: None,
 			stanza_size: 0,
@@ -324,13 +342,15 @@ impl<'x> XMPPStream<'x> {
 
 					let swap = swap.unwrap();
 					let root = swap.root();
-					if root.localname == self.cfg.error_localname && root.nsuri.as_ref().and_then(|v| { Some(**v == self.cfg.stream_namespace.as_str()) }).unwrap_or(false) {
+					let ev = if root.localname == self.cfg.error_localname && root.nsuri.as_ref().and_then(|v| { Some(**v == self.cfg.stream_namespace.as_str()) }).unwrap_or(false) {
 						drop(root);
-						Ok(ProcResult::Event(Event::Error(swap)))
+						ProcResult::Event(Event::Error(swap))
 					} else {
 						drop(root);
-						Ok(ProcResult::Event(Event::Stanza(swap)))
-					}
+						ProcResult::Event(Event::Stanza(swap))
+					};
+					self.p.release_temporaries();
+					Ok(ev)
 				} else {
 					st.up();
 					Ok(ProcResult::NeedMore)
@@ -388,6 +408,10 @@ impl<'x> XMPPStream<'x> {
 
 	pub fn cfg(&self) -> &StreamConfig {
 		&self.cfg
+	}
+
+	pub fn release_temporaries(&mut self) {
+		self.p.release_temporaries()
 	}
 }
 
@@ -673,6 +697,7 @@ mod tests {
 			stream_namespace: Rc::new(rxml::CData::from_string("streamns".to_string()).unwrap()),
 			stream_localname: "stream".to_string(),
 			error_localname: "error".to_string(),
+			init_ctx: None,
 		});
 		s.feed(data).unwrap();
 		assert_eq!(s.pending_bytes, data.len());

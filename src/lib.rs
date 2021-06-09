@@ -27,6 +27,7 @@ fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
 
 	let xmppstream = lua.create_table()?;
 	xmppstream.set("new", lua.create_function(xmppstream::lua::stream_new)?)?;
+	xmppstream.set("new_context", lua.create_function(xmppstream::lua::ctx_new)?)?;
 	xmppstream.set("ns_separator", "\x01")?;
 	xmppstream.set("ns_pattern", "^([^\x01]*)\x01?(.*)$")?;
 	xmppstream.set("rxml_version", rxml::VERSION)?;
