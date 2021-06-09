@@ -213,6 +213,7 @@ impl Formatter {
 mod tests {
 	use super::*;
 	use std::collections::HashMap;
+	use std::convert::TryInto;
 
 	#[test]
 	fn escape_plain() {
@@ -272,8 +273,8 @@ mod tests {
 
 	#[test]
 	fn format_escapes_text_nodes() {
-		let el = tree::ElementPtr::new(None, "foo".to_string());
-		el.borrow_mut().text("&bar;<baz/>fnord\"'".to_string());
+		let el = tree::ElementPtr::new(None, "foo".try_into().unwrap());
+		el.borrow_mut().text("&bar;<baz/>fnord\"'".try_into().unwrap());
 		let fmt = Formatter{ indent: None, initial_level: 0 };
 		let s = fmt.format(el.borrow()).unwrap();
 		assert_eq!(s, "<foo>&amp;bar;&lt;baz/&gt;fnord&quot;&apos;</foo>");
@@ -282,8 +283,8 @@ mod tests {
 	#[test]
 	fn format_escapes_attribute_values() {
 		let mut attr = HashMap::<String, String>::new();
-		attr.insert("moo".to_string(), "&bar;<baz/>fnord\"'".to_string());
-		let el = tree::ElementPtr::new_with_attr(None, "foo".to_string(), Some(attr));
+		attr.insert("moo".try_into().unwrap(), "&bar;<baz/>fnord\"'".try_into().unwrap());
+		let el = tree::ElementPtr::new_with_attr(None, "foo".try_into().unwrap(), Some(attr));
 		let fmt = Formatter{ indent: None, initial_level: 0 };
 		let s = fmt.format(el.borrow()).unwrap();
 		assert_eq!(s, "<foo moo='&amp;bar;&lt;baz/&gt;fnord&quot;&apos;'/>");
@@ -291,15 +292,15 @@ mod tests {
 
 	#[test]
 	fn format_handles_namespaces() {
-		let ns1 = Rc::new(CData::from_string("uri:foo".to_string()).unwrap());
-		let ns2 = Rc::new(CData::from_string("uri:bar".to_string()).unwrap());
+		let ns1 = Rc::new(CData::from_string("uri:foo".try_into().unwrap()).unwrap());
+		let ns2 = Rc::new(CData::from_string("uri:bar".try_into().unwrap()).unwrap());
 		let mut el = tree::ElementPtr::new_with_attr(
 			Some(ns1.clone()),
-			"foo".to_string(),
+			"foo".try_into().unwrap(),
 			None,
 		);
-		let c1 = el.borrow_mut().tag(Some(ns1.clone()), "child".to_string(), None);
-		let c2 = el.borrow_mut().tag(Some(ns2.clone()), "child".to_string(), None);
+		let c1 = el.borrow_mut().tag(Some(ns1.clone()), "child".try_into().unwrap(), None);
+		let c2 = el.borrow_mut().tag(Some(ns2.clone()), "child".try_into().unwrap(), None);
 		let fmt = Formatter{ indent: None, initial_level: 0 };
 		let s = fmt.format(el.borrow()).unwrap();
 		assert_eq!(s, "<foo xmlns='uri:foo'><child/><child xmlns='uri:bar'/></foo>");

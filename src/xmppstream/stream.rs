@@ -296,13 +296,13 @@ impl<'x> XMPPStream<'x> {
 				match st_opt {
 					Some(st) => {
 						accum_bytes(&mut self.stanza_size, em.len())?;
-						st.tag(nsuri, localname.as_string(), Some(converted_attrs));
+						st.tag(nsuri, localname, Some(converted_attrs));
 						Ok(ProcResult::NeedMore)
 					},
 					None => {
 						let stanza = stanza::Stanza::new(
 							nsuri,
-							localname.to_string(),
+							localname,
 							Some(converted_attrs),
 						);
 						self.stanza = Some(stanza);

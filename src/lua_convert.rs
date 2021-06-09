@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::collections::HashMap;
 
-use rxml::CData;
+use rxml::{NCName, CData};
 
 use crate::validation;
 
@@ -21,6 +21,18 @@ pub fn convert_element_name_from_lua(v: LuaValue) -> LuaResult<String> {
 	match validation::convert_xml_element_name(Cow::from(raw)) {
 		Ok(s) => Ok(s),
 		Err(e) => return Err(LuaError::RuntimeError(format!("invalid element name: {}", e))),
+	}
+}
+
+pub fn convert_ncname_from_lua(v: LuaValue) -> LuaResult<NCName> {
+	let raw = strict_string_from_lua(&v)?;
+	let s = match String::from_utf8(raw.to_vec()) {
+		Ok(s) => s,
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid utf-8: {}", e))),
+	};
+	match NCName::from_string(s) {
+		Ok(s) => Ok(s),
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid ncname: {}", e))),
 	}
 }
 
@@ -57,6 +69,20 @@ pub fn convert_optional_character_data_from_lua(v: LuaValue) -> LuaResult<Option
 		LuaValue::Nil => Ok(None),
 		_ => {
 			let data = convert_character_data_from_lua(v)?;
+			if data.is_empty() {
+				Ok(None)
+			} else {
+				Ok(Some(data))
+			}
+		}
+	}
+}
+
+pub fn convert_optional_cdata_from_lua(v: LuaValue) -> LuaResult<Option<CData>> {
+	match v {
+		LuaValue::Nil => Ok(None),
+		_ => {
+			let data = convert_cdata_from_lua(v)?;
 			if data.is_empty() {
 				Ok(None)
 			} else {

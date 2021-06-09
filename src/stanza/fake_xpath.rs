@@ -55,6 +55,7 @@ mod tests {
 	use super::*;
 	use super::super::stanza;
 	use std::rc::Rc;
+	use std::convert::TryInto;
 	use rxml::CData;
 
 	const TEST_XMLNS: &str = "urn:uuid:81b8253b-ba8c-4c91-8d3a-f2c6c10c7bfe";
@@ -62,21 +63,21 @@ mod tests {
 	fn build_tree() -> tree::ElementPtr {
 		let mut st = stanza::Stanza::wrap(tree::ElementPtr::new(
 			None,
-			"root".to_string(),
+			"root".try_into().unwrap(),
 		));
-		st.try_deref().unwrap().borrow_mut().attr.insert("foo".to_string(), "bar".to_string());
-		st.tag(None, "child1".to_string(), None);
-		st.tag(None, "nested1".to_string(), None);
-		st.text("Hello World from nested1!".to_string());
+		st.try_deref().unwrap().borrow_mut().attr.insert("foo".try_into().unwrap(), "bar".try_into().unwrap());
+		st.tag(None, "child1".try_into().unwrap(), None);
+		st.tag(None, "nested1".try_into().unwrap(), None);
+		st.text("Hello World from nested1!".try_into().unwrap());
 		st.up();
-		st.tag(None, "nested2".to_string(), None);
-		st.text("Hello World from nested2!".to_string());
+		st.tag(None, "nested2".try_into().unwrap(), None);
+		st.text("Hello World from nested2!".try_into().unwrap());
 		st.reset();
 
 		{
-			let child2_ptr = st.tag(Some(Rc::new(CData::from_string(TEST_XMLNS.to_string()).unwrap())), "child2".to_string(), None).unwrap();
+			let child2_ptr = st.tag(Some(Rc::new(CData::from_string(TEST_XMLNS.try_into().unwrap()).unwrap())), "child2".try_into().unwrap(), None).unwrap();
 			let mut child2 = child2_ptr.borrow_mut();
-			child2.attr.insert("attr2".to_string(), "value2".to_string());
+			child2.attr.insert("attr2".try_into().unwrap(), "value2".try_into().unwrap());
 		}
 
 		st.root_ptr()

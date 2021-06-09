@@ -34,7 +34,7 @@ impl Deserialize for tree::Node {
 impl Preserialize for tree::Element {
 	fn preserialize<'l>(&self, lua: &'l Lua) -> LuaResult<LuaValue<'l>> {
 		let result = lua.create_table()?;
-		result.set("name", self.localname.clone())?;
+		result.set("name", self.localname.to_string())?;
 		result.set("attr", self.attr.preserialize(lua)?)?;
 		for (i, child_node) in self.iter().enumerate() {
 			let lua_i = i + 1;
@@ -47,7 +47,7 @@ impl Preserialize for tree::Element {
 impl Deserialize for tree::ElementPtr {
 	fn deserialize<'l>(lua: &'l Lua, value: LuaValue<'l>) -> LuaResult<Self> {
 		let value = LuaTable::from_lua(value, lua)?;
-		let name = convert_element_name_from_lua(value.get::<_, LuaValue>("name")?)?;
+		let name = convert_ncname_from_lua(value.get::<_, LuaValue>("name")?)?;
 		let (nsuri, attr) = lua_table_to_attr(Some(value.get::<_, LuaTable>("attr")?))?;
 		let el = tree::ElementPtr::new_with_attr(
 			nsuri,

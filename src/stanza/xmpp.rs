@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::cell::Ref;
 use std::rc::Rc;
 use std::collections::HashMap;
@@ -93,7 +94,7 @@ impl ElementSelector {
 		)
 	}
 
-	pub fn select_str<'a>(&self, name: &'a String, xmlns: &'a Option<Rc<CData>>) -> bool {
+	pub fn select_str<'a>(&self, name: &str, xmlns: &'a Option<Rc<CData>>) -> bool {
 		if self.filter_by_name && name != self.name.as_ref().unwrap() {
 			return false;
 		}
@@ -119,7 +120,7 @@ impl ElementSelector {
 	}
 }
 
-type ErrorInfo = (String, String, Option<String>, Option<tree::ElementPtr>);
+type ErrorInfo = (String, rxml::NCName, Option<String>, Option<tree::ElementPtr>);
 
 /// Extract ErrorInfo out of a stanza error.
 ///
@@ -127,7 +128,7 @@ type ErrorInfo = (String, String, Option<String>, Option<tree::ElementPtr>);
 /// parent stanza. Use extract_error for that.
 pub fn extract_error_info<'a>(el: Ref<'a, tree::Element>) -> Option<ErrorInfo> {
 	let type_ = el.attr.get("type")?;
-	let mut condition = "undefined-condition".to_string();
+	let mut condition: rxml::NCName = "undefined-condition".try_into().unwrap();
 	let mut text: Option<String> = None;
 	let mut appdef: Option<tree::ElementPtr> = None;
 
@@ -163,7 +164,7 @@ pub fn extract_error<'a>(st: Ref<'a, tree::Element>) -> Option<ErrorInfo> {
 	extract_error_info(error_child.borrow())
 }
 
-pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition: String, text: Option<String>, by: Option<String>) -> Result<tree::ElementPtr, String> {
+pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition: rxml::NCName, text: Option<String>, by: Option<String>) -> Result<tree::ElementPtr, String> {
 	let reply_ptr = {
 		match st.attr.get("type") {
 			Some(s) => match s.as_str() {
@@ -178,7 +179,7 @@ pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition
 		let err_ptr = {
 			let mut reply = reply_ptr.borrow_mut();
 			reply.attr.insert("type".to_string(), "error".to_string());
-			reply.tag(None, "error".to_string(), None)
+			reply.tag(None, "error".try_into().unwrap(), None)
 		};
 		let mut err = err_ptr.borrow_mut();
 		err.attr.insert("type".to_string(), type_);
@@ -193,7 +194,7 @@ pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition
 		err.tag(nsuri.clone(), condition, None);
 		match text {
 			Some(text) => {
-				let text_el_ptr = err.tag(nsuri.clone(), "text".to_string(), None);
+				let text_el_ptr = err.tag(nsuri.clone(), "text".try_into().unwrap(), None);
 				let mut text_el = text_el_ptr.borrow_mut();
 				text_el.text(text);
 			},
@@ -215,6 +216,7 @@ pub fn find_first_child<'a>(el: Ref<'a, tree::Element>, name: Option<String>, xm
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::convert::TryInto;
 
 	fn mkerrorattr(typename: String) -> HashMap<String, String> {
 		let mut result = HashMap::new();
@@ -229,51 +231,51 @@ mod tests {
 	#[test]
 	fn elementselector_match_by_name() {
 		let sel = ElementSelector::select_inside_xmlns(None, Some("foo".to_string()), None);
-		assert!(sel.select_str(&"foo".to_string(), &None));
-		assert!(!sel.select_str(&"bar".to_string(), &None));
+		assert!(sel.select_str("foo", &None));
+		assert!(!sel.select_str("bar", &None));
 	}
 
 	#[test]
 	fn elementselector_match_by_parent_xmlns() {
 		let sel = ElementSelector::select_inside_xmlns(mknsuri("urn:foo"), None, None);
-		assert!(sel.select_str(&"foo".to_string(), &mknsuri("urn:foo")));
-		assert!(sel.select_str(&"foo".to_string(), &None));
-		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:bar")));
+		assert!(sel.select_str("foo", &mknsuri("urn:foo")));
+		assert!(sel.select_str("foo", &None));
+		assert!(!sel.select_str("foo", &mknsuri("urn:bar")));
 	}
 
 	#[test]
 	fn elementselector_match_by_absent_parent_xmlns() {
 		let sel = ElementSelector::select_inside_xmlns(None, None, None);
-		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:foo")));
-		assert!(sel.select_str(&"foo".to_string(), &None));
-		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:bar")));
+		assert!(!sel.select_str("foo", &mknsuri("urn:foo")));
+		assert!(sel.select_str("foo", &None));
+		assert!(!sel.select_str("foo", &mknsuri("urn:bar")));
 	}
 
 	#[test]
 	fn elementselector_match_by_explicit_xmlns() {
 		let sel = ElementSelector::select_inside_xmlns(mknsuri("urn:foo"), None, mknsuri("urn:bar"));
-		assert!(!sel.select_str(&"foo".to_string(), &mknsuri("urn:foo")));
-		assert!(!sel.select_str(&"foo".to_string(), &None));
-		assert!(sel.select_str(&"foo".to_string(), &mknsuri("urn:bar")));
+		assert!(!sel.select_str("foo", &mknsuri("urn:foo")));
+		assert!(!sel.select_str("foo", &None));
+		assert!(sel.select_str("foo", &mknsuri("urn:bar")));
 	}
 
 	#[test]
 	fn elementselector_match_by_name_and_xmlns() {
 		let sel = ElementSelector::select_inside_xmlns(mknsuri("jabber:client"), Some("message".to_string()), mknsuri("jabber:client"));
-		assert!(sel.select_str(&"message".to_string(), &mknsuri("jabber:client")));
-		assert!(sel.select_str(&"message".to_string(), &None));
-		assert!(!sel.select_str(&"message".to_string(), &mknsuri("urn:server")));
-		assert!(!sel.select_str(&"iq".to_string(), &mknsuri("jabber:client")));
-		assert!(!sel.select_str(&"iq".to_string(), &None));
-		assert!(!sel.select_str(&"iq".to_string(), &mknsuri("jabber:server")));
+		assert!(sel.select_str("message", &mknsuri("jabber:client")));
+		assert!(sel.select_str("message", &None));
+		assert!(!sel.select_str("message", &mknsuri("urn:server")));
+		assert!(!sel.select_str("iq", &mknsuri("jabber:client")));
+		assert!(!sel.select_str("iq", &None));
+		assert!(!sel.select_str("iq", &mknsuri("jabber:server")));
 	}
 
 	#[test]
 	fn extract_error_info_extracts_type_and_defaults_to_undef_condition() {
 		let e = tree::ElementPtr::new_with_attr(
 			None,
-			"error".to_string(),
-			Some(mkerrorattr("error type".to_string())),
+			"error".try_into().unwrap(),
+			Some(mkerrorattr("error type".try_into().unwrap())),
 		);
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
@@ -286,10 +288,10 @@ mod tests {
 	fn extract_error_info_extracts_type_and_condition() {
 		let e = tree::ElementPtr::new_with_attr(
 			None,
-			"error".to_string(),
-			Some(mkerrorattr("error type".to_string())),
+			"error".try_into().unwrap(),
+			Some(mkerrorattr("error type".try_into().unwrap())),
 		);
-		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".to_string(), None);
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".try_into().unwrap(), None);
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
 		assert_eq!(condition, "random-condition");
@@ -301,11 +303,11 @@ mod tests {
 	fn extract_error_info_extracts_text() {
 		let e = tree::ElementPtr::new_with_attr(
 			None,
-			"error".to_string(),
-			Some(mkerrorattr("error type".to_string())),
+			"error".try_into().unwrap(),
+			Some(mkerrorattr("error type".try_into().unwrap())),
 		);
-		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".to_string(), None);
-		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "text".to_string(), None).borrow_mut().text("foobar 2342".to_string());
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".try_into().unwrap(), None);
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "text".try_into().unwrap(), None).borrow_mut().text("foobar 2342".try_into().unwrap());
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
 		assert_eq!(condition, "random-condition");
@@ -317,12 +319,12 @@ mod tests {
 	fn extract_error_info_extracts_application_defined_condition_el() {
 		let e = tree::ElementPtr::new_with_attr(
 			None,
-			"error".to_string(),
-			Some(mkerrorattr("error type".to_string())),
+			"error".try_into().unwrap(),
+			Some(mkerrorattr("error type".try_into().unwrap())),
 		);
-		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".to_string(), None);
-		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "text".to_string(), None).borrow_mut().text("foobar 2342".to_string());
-		let appdef_el = e.borrow_mut().tag(mknsuri("urn:uuid:5cf726d1-5be8-44bb-b14a-62880f783ac9"), "appdefcond".to_string(), None);
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "random-condition".try_into().unwrap(), None);
+		e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "text".try_into().unwrap(), None).borrow_mut().text("foobar 2342".try_into().unwrap());
+		let appdef_el = e.borrow_mut().tag(mknsuri("urn:uuid:5cf726d1-5be8-44bb-b14a-62880f783ac9"), "appdefcond".try_into().unwrap(), None);
 		let (type_, condition, text, extra) = extract_error_info(e.borrow()).unwrap();
 		assert_eq!(type_, "error type");
 		assert_eq!(condition, "random-condition");
@@ -334,12 +336,12 @@ mod tests {
 	fn extract_error_from_stanza() {
 		let st = tree::ElementPtr::new_with_attr(
 			mknsuri("jabber:client"),
-			"message".to_string(),
+			"message".try_into().unwrap(),
 			None,
 		);
 		{
-			let e = st.borrow_mut().tag(None, "error".to_string(), Some(mkerrorattr("wait".to_string())));
-			e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "remote-server-not-found".to_string(), None);
+			let e = st.borrow_mut().tag(None, "error".try_into().unwrap(), Some(mkerrorattr("wait".try_into().unwrap())));
+			e.borrow_mut().tag(mknsuri(XMLNS_XMPP_STANZAS), "remote-server-not-found".try_into().unwrap(), None);
 		}
 
 		let (type_, condition, text, extra) = extract_error(st.borrow()).unwrap();
@@ -353,10 +355,10 @@ mod tests {
 	fn make_error_reply_sets_error_type() {
 		let st = tree::ElementPtr::new_with_attr(
 			None,
-			"message".to_string(),
+			"message".try_into().unwrap(),
 			None,
 		);
-		let reply = make_error_reply(st.borrow(), "cancel".to_string(), "undefined-condition".to_string(), None, None);
+		let reply = make_error_reply(st.borrow(), "cancel".try_into().unwrap(), "undefined-condition".try_into().unwrap(), None, None);
 		assert!(reply.is_ok());
 		let reply = reply.unwrap();
 		assert_eq!(reply.borrow().attr.get("type").unwrap(), "error");
@@ -367,10 +369,10 @@ mod tests {
 	fn extract_error_can_extract_from_make_error_reply_result() {
 		let st = tree::ElementPtr::new_with_attr(
 			None,
-			"message".to_string(),
+			"message".try_into().unwrap(),
 			None,
 		);
-		let reply = make_error_reply(st.borrow(), "cancel".to_string(), "some-condition".to_string(), Some("error text".to_string()), Some("origin".to_string()));
+		let reply = make_error_reply(st.borrow(), "cancel".try_into().unwrap(), "some-condition".try_into().unwrap(), Some("error text".try_into().unwrap()), Some("origin".try_into().unwrap()));
 		assert!(reply.is_ok());
 		let (type_, condition, text, extra) = extract_error(reply.unwrap().borrow()).unwrap();
 		assert_eq!(type_, "cancel");
@@ -384,16 +386,16 @@ mod tests {
 	fn extract_error_can_extract_from_make_error_reply_result_with_appinfo() {
 		let st = tree::ElementPtr::new_with_attr(
 			None,
-			"message".to_string(),
+			"message".try_into().unwrap(),
 			None,
 		);
-		let reply = make_error_reply(st.borrow(), "cancel".to_string(), "some-condition".to_string(), Some("error text".to_string()), Some("origin".to_string()));
+		let reply = make_error_reply(st.borrow(), "cancel".try_into().unwrap(), "some-condition".try_into().unwrap(), Some("error text".try_into().unwrap()), Some("origin".try_into().unwrap()));
 		assert!(reply.is_ok());
 		let reply = reply.unwrap();
 		let custom_condition = {
 			let custom_el_ptr = reply.borrow()[0].as_element_ptr().unwrap().borrow_mut().tag(
 				mknsuri("urn:uuid:23d5821c-0141-418c-aa94-665ae2649b7c"),
-				"custom-condition".to_string(),
+				"custom-condition".try_into().unwrap(),
 				None,
 			);
 			custom_el_ptr

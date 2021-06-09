@@ -1,4 +1,5 @@
 use mlua::prelude::*;
+use std::convert::TryInto;
 use std::rc::Rc;
 use std::cell::{RefCell, Ref, RefMut};
 use std::collections::HashMap;
@@ -347,7 +348,7 @@ impl LuaUserData for LuaStanza {
 		});
 
 		methods.add_method("tag", |_, this, (name, attr, namespaces): (LuaValue, Option<LuaTable>, Option<LuaTable>)| -> LuaResult<LuaStanza> {
-			let name = convert_element_name_from_lua(name)?;
+			let name = convert_ncname_from_lua(name)?;
 			let (nsuri, attr) = lua_table_to_attr(attr)?;
 			let namespaces = match namespaces {
 				Some(tbl) => Some(lua_table_to_plain_attr(tbl)?),
@@ -370,7 +371,7 @@ impl LuaUserData for LuaStanza {
 		});
 
 		methods.add_method("text_tag", |_, this, (name, text, attr): (LuaValue, LuaValue, Option<LuaTable>)| -> LuaResult<LuaStanza> {
-			let name = convert_element_name_from_lua(name)?;
+			let name = convert_ncname_from_lua(name)?;
 			let text = convert_character_data_from_lua(text)?;
 			let (nsuri, attr) = lua_table_to_attr(attr)?;
 			let mut this_st = this.0.borrow_mut();
@@ -473,8 +474,8 @@ impl LuaUserData for LuaStanza {
 			let st = this.0.borrow();
 			let root_ptr = st.root_ptr();
 			match xmpp::extract_error(root_ptr.borrow()) {
-				Some((type_, condition, text, None)) => Ok((Some(type_), Some(condition), text, None)),
-				Some((type_, condition, text, Some(el))) => Ok((Some(type_), Some(condition), text, Some(LuaStanza::wrap(stanza::Stanza::wrap(el))))),
+				Some((type_, condition, text, None)) => Ok((Some(type_), Some(condition.to_string()), text, None)),
+				Some((type_, condition, text, Some(el))) => Ok((Some(type_), Some(condition.to_string()), text, Some(LuaStanza::wrap(stanza::Stanza::wrap(el))))),
 				None => Ok((None, None, None, None)),
 			}
 		});
@@ -482,7 +483,7 @@ impl LuaUserData for LuaStanza {
 		methods.add_method("query", |_, this, xmlns: LuaValue| -> LuaResult<LuaStanza> {
 			let xmlns = convert_cdata_from_lua(xmlns)?;
 			let mut st = this.0.borrow_mut();
-			st.tag(Some(Rc::new(xmlns)), "query".to_string(), None);
+			st.tag(Some(Rc::new(xmlns)), "query".try_into().unwrap(), None);
 			Ok(this.clone())
 		});
 
@@ -633,7 +634,7 @@ impl LuaUserData for LuaStanza {
 }
 
 pub fn stanza_new<'l>(_: &'l Lua, (name, attr): (LuaValue, Option<LuaTable>)) -> LuaResult<LuaStanza> {
-	let name = convert_element_name_from_lua(name)?;
+	let name = convert_ncname_from_lua(name)?;
 	let (nsuri, attr) = lua_table_to_attr(attr)?;
 	Ok(LuaStanza::wrap(
 		stanza::Stanza::new(nsuri, name, attr),
@@ -645,10 +646,10 @@ pub fn stanza_message<'l>(_: &'l Lua, (attr, body): (Option<LuaTable>, LuaValue)
 
 	let body = convert_optional_character_data_from_lua(body)?;
 
-	let mut st = stanza::Stanza::new(nsuri.clone(), "message".to_string(), attr);
+	let mut st = stanza::Stanza::new(nsuri.clone(), "message".try_into().unwrap(), attr);
 	match body {
 		Some(s) => {
-			st.tag(nsuri, "body".to_string(), None);
+			st.tag(nsuri, "body".try_into().unwrap(), None);
 			st.text(s);
 			st.up();
 		},
@@ -673,7 +674,7 @@ pub fn stanza_iq<'l>(_: &'l Lua, attr: Option<LuaTable>) -> LuaResult<LuaStanza>
 	}
 
 	Ok(LuaStanza::wrap(stanza::Stanza::new(
-		nsuri, "iq".to_string(), Some(attr),
+		nsuri, "iq".try_into().unwrap(), Some(attr),
 	)))
 }
 
@@ -681,7 +682,7 @@ pub fn stanza_presence<'l>(_: &'l Lua, attr: Option<LuaTable>) -> LuaResult<LuaS
 	let (nsuri, attr) = lua_table_to_attr(attr)?;
 
 	Ok(LuaStanza::wrap(stanza::Stanza::new(
-		nsuri, "presence".to_string(), attr,
+		nsuri, "presence".try_into().unwrap(), attr,
 	)))
 }
 
@@ -699,7 +700,7 @@ pub fn stanza_reply<'l>(lua: &'l Lua, st: LuaValue) -> LuaResult<LuaStanza> {
 	Ok(LuaStanza::wrap(stanza::Stanza::wrap(result)))
 }
 
-fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::Element>, extra: LuaTable) -> LuaResult<()> {
+fn process_util_error_extra<'a>(condition: rxml::NCName, mut error: RefMut<'a, tree::Element>, extra: LuaTable) -> LuaResult<()> {
 	if condition == "gone" {
 		// check for uri in table, if it exists, we add it as text to
 		// the condition node
@@ -727,7 +728,7 @@ fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::E
 				convert_cdata_from_lua(nsv)
 			}).and_then(|ns| {
 				Ok((ns, extra.get::<_, LuaValue>("condition").and_then(|cv| {
-					convert_element_name_from_lua(cv)
+					convert_ncname_from_lua(cv)
 				})?))
 			}).and_then(|(ns, condition)| {
 				error.tag(
@@ -744,7 +745,7 @@ fn process_util_error_extra<'a>(condition: String, mut error: RefMut<'a, tree::E
 
 fn stanza_error_reply_from_util_error<'l>(_: &'l Lua, (st, error_table): (LuaStanza, LuaTable)) -> LuaResult<LuaStanza> {
 	let type_ = convert_character_data_from_lua(error_table.get::<_, LuaValue>("type")?)?;
-	let condition = convert_element_name_from_lua(error_table.get::<_, LuaValue>("condition")?)?;
+	let condition = convert_ncname_from_lua(error_table.get::<_, LuaValue>("condition")?)?;
 	let text = convert_optional_character_data_from_lua(error_table.get::<_, LuaValue>("text")?)?;
 	let by = {
 		match error_table.get::<_, Option<LuaTable>>("context")? {
@@ -786,7 +787,7 @@ pub fn stanza_error_reply<'l>(lua: &'l Lua, (st, type_, condition, text, by): (L
 		}
 		other => convert_character_data_from_lua(other)?
 	};
-	let condition = convert_element_name_from_lua(condition).unwrap_or("undefined-condition".to_string());
+	let condition = convert_ncname_from_lua(condition).unwrap_or("undefined-condition".try_into().unwrap());
 	let text = convert_optional_character_data_from_lua(text)?;
 	let by = convert_optional_character_data_from_lua(by)?;
 	let st_root = st.0.borrow().root_ptr();

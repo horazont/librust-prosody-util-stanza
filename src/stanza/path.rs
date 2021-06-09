@@ -40,11 +40,12 @@ impl ElementPath {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::convert::TryInto;
 
 	#[test]
 	fn element_path_new_derefs_to_root() {
 		let p = ElementPath::new();
-		let root = tree::ElementPtr::new(None, "root".to_string());
+		let root = tree::ElementPtr::new(None, "root".try_into().unwrap());
 		let root_ref = p.deref_on(root.clone());
 		assert_eq!(root.borrow().localname, root_ref.unwrap().borrow().localname);
 	}
@@ -52,10 +53,10 @@ mod tests {
 	#[test]
 	fn element_path_down_to_ref_to_children() {
 		let mut p = ElementPath::new();
-		let root = tree::ElementPtr::new(None, "root".to_string());
+		let root = tree::ElementPtr::new(None, "root".try_into().unwrap());
 		{
 			let mut root_el = root.borrow_mut();
-			root_el.tag(None, "body".to_string(), None).borrow_mut().text("foobar".to_string());
+			root_el.tag(None, "body".try_into().unwrap(), None).borrow_mut().text("foobar".try_into().unwrap());
 		}
 
 		p.down(0);
@@ -66,10 +67,10 @@ mod tests {
 	#[test]
 	fn element_path_up_to_go_back() {
 		let mut p = ElementPath::new();
-		let root = tree::ElementPtr::new(None, "root".to_string());
+		let root = tree::ElementPtr::new(None, "root".try_into().unwrap());
 		{
 			let mut root_el = root.borrow_mut();
-			root_el.tag(None, "body".to_string(), None).borrow_mut().text("foobar".to_string());
+			root_el.tag(None, "body".try_into().unwrap(), None).borrow_mut().text("foobar".try_into().unwrap());
 		}
 
 		p.down(0);
@@ -82,10 +83,10 @@ mod tests {
 	#[test]
 	fn element_path_down_to_ref_to_text_is_none() {
 		let mut p = ElementPath::new();
-		let root = tree::ElementPtr::new(None, "root".to_string());
+		let root = tree::ElementPtr::new(None, "root".try_into().unwrap());
 		{
 			let mut root_el = root.borrow_mut();
-			root_el.tag(None, "body".to_string(), None).borrow_mut().text("foobar".to_string());
+			root_el.tag(None, "body".try_into().unwrap(), None).borrow_mut().text("foobar".try_into().unwrap());
 		}
 
 		p.down(0);
