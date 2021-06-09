@@ -6,6 +6,8 @@ mod lua_convert;
 mod lua_serialize_compat;
 mod validation;
 
+pub const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 #[mlua::lua_module]
 fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
 	let exports = lua.create_table()?;
@@ -27,7 +29,10 @@ fn librprosody(lua: &Lua) -> LuaResult<LuaTable> {
 	xmppstream.set("new", lua.create_function(xmppstream::lua::stream_new)?)?;
 	xmppstream.set("ns_separator", "\x01")?;
 	xmppstream.set("ns_pattern", "^([^\x01]*)\x01?(.*)$")?;
+	xmppstream.set("rxml_version", rxml::VERSION)?;
 	exports.set("xmppstream", xmppstream)?;
+
+	exports.set("version", VERSION)?;
 
 	Ok(exports)
 }
