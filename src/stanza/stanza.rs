@@ -7,6 +7,7 @@ use rxml::CData;
 
 use super::tree;
 use super::path;
+use super::attrstr::AttrName;
 
 #[derive(PartialEq)]
 pub struct Stanza {
@@ -15,7 +16,7 @@ pub struct Stanza {
 }
 
 impl Stanza {
-	pub fn new(nsuri: Option<Rc<CData>>, name: rxml::NCName, attr: Option<HashMap<String, String>>) -> Stanza {
+	pub fn new(nsuri: Option<Rc<CData>>, name: rxml::Name, attr: Option<HashMap<AttrName, String>>) -> Stanza {
 		Stanza::wrap(
 			tree::ElementPtr::new_with_attr(nsuri, name, attr),
 		)
@@ -40,7 +41,7 @@ impl Stanza {
 		self.root.clone()
 	}
 
-	pub fn tag(&mut self, nsuri: Option<Rc<CData>>, name: rxml::NCName, attr: Option<HashMap<String, String>>) -> Option<tree::ElementPtr> {
+	pub fn tag(&mut self, nsuri: Option<Rc<CData>>, name: rxml::Name, attr: Option<HashMap<AttrName, String>>) -> Option<tree::ElementPtr> {
 		let parent_ptr = self.cursor.deref_on(self.root.clone())?;
 		let mut parent = parent_ptr.borrow_mut();
 		let new_index = parent.len();

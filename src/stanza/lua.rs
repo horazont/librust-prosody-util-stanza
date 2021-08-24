@@ -10,6 +10,7 @@ use super::tree;
 use super::xmpp;
 use super::fake_xpath;
 use super::xml;
+use super::attrstr;
 use crate::lua_convert::*;
 use crate::lua_serialize_compat::{Preserialize, Deserialize};
 
@@ -46,6 +47,12 @@ impl FromLua<'_> for tree::Node {
 	}
 }
 
+impl<'l> ToLua<'l> for attrstr::AttrName {
+	fn to_lua(self, lua: &'l Lua) -> LuaResult<LuaValue> {
+		self.as_string().to_lua(lua)
+	}
+}
+
 #[derive(Clone)]
 pub struct LuaAttrHandle(tree::ElementPtr);
 
@@ -57,14 +64,18 @@ impl LuaAttrHandle {
 
 impl LuaUserData for LuaAttrHandle {
 	fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
-		methods.add_meta_method(LuaMetaMethod::Index, |lua, this, index: String| -> LuaResult<LuaValue> {
+		methods.add_meta_method(LuaMetaMethod::Index, |lua, this, mut index: String| -> LuaResult<LuaValue> {
 			if index == "xmlns" {
 				match &this.0.borrow().nsuri {
 					Some(rcptr) => (**rcptr).clone().as_string().to_lua(lua),
 					None => Ok(LuaValue::Nil),
 				}
 			} else {
-				match this.0.borrow().attr.get(&index) {
+				if index.starts_with("xml:") {
+					index.reserve(attrstr::XMLNS_XML_PREFIX.len() - 4);
+					index.replace_range(..4, attrstr::XMLNS_XML_PREFIX);
+				}
+				match this.0.borrow().attr.get(index.as_str()) {
 					Some(v) => v.clone().to_lua(lua),
 					None => Ok(LuaValue::Nil),
 				}
@@ -72,7 +83,7 @@ impl LuaUserData for LuaAttrHandle {
 		});
 
 		methods.add_meta_method_mut(LuaMetaMethod::NewIndex, |_, this, (key, value): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
-			let key = convert_attribute_name_from_lua(key)?;
+			let key = convert_attrname_from_lua(key)?;
 			if key == "xmlns" {
 				match value {
 					LuaValue::Nil => {
@@ -348,7 +359,7 @@ impl LuaUserData for LuaStanza {
 		});
 
 		methods.add_method("tag", |_, this, (name, attr, namespaces): (LuaValue, Option<LuaTable>, Option<LuaTable>)| -> LuaResult<LuaStanza> {
-			let name = convert_ncname_from_lua(name)?;
+			let name = convert_name_from_lua(name)?;
 			let (nsuri, attr) = lua_table_to_attr(attr)?;
 			let namespaces = match namespaces {
 				Some(tbl) => Some(lua_table_to_plain_attr(tbl)?),
@@ -371,7 +382,7 @@ impl LuaUserData for LuaStanza {
 		});
 
 		methods.add_method("text_tag", |_, this, (name, text, attr): (LuaValue, LuaValue, Option<LuaTable>)| -> LuaResult<LuaStanza> {
-			let name = convert_ncname_from_lua(name)?;
+			let name = convert_name_from_lua(name)?;
 			let text = convert_character_data_from_lua(text)?;
 			let (nsuri, attr) = lua_table_to_attr(attr)?;
 			let mut this_st = this.0.borrow_mut();
@@ -634,7 +645,7 @@ impl LuaUserData for LuaStanza {
 }
 
 pub fn stanza_new<'l>(_: &'l Lua, (name, attr): (LuaValue, Option<LuaTable>)) -> LuaResult<LuaStanza> {
-	let name = convert_ncname_from_lua(name)?;
+	let name = convert_name_from_lua(name)?;
 	let (nsuri, attr) = lua_table_to_attr(attr)?;
 	Ok(LuaStanza::wrap(
 		stanza::Stanza::new(nsuri, name, attr),
@@ -733,7 +744,7 @@ fn process_util_error_extra<'a>(condition: rxml::NCName, mut error: RefMut<'a, t
 			}).and_then(|(ns, condition)| {
 				error.tag(
 					Some(Rc::new(ns)),
-					condition,
+					condition.into(),
 					None,
 				);
 				Ok(())

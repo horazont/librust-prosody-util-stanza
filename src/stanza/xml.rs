@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::fmt::Write;
 use rxml::CData;
 use super::tree;
+use super::attrstr;
 
 const SPECIALS: &'static [char] = &[
 	'"',
@@ -53,11 +54,15 @@ fn attr_escape<'a, W>(out: &'a mut W, name: &'a str, val: &'a str, nsid: &mut us
 	};
 
 	if let Some(xmlns) = xmlns {
-		let prefix = format!("prosody-tmp-ns{}", *nsid);
-		*nsid = *nsid + 1;
-		write!(out, " xmlns:{}=", prefix)?;
-		attr_escape_value(out, xmlns)?;
-		write!(out, " {}:{}=", prefix, name)?;
+		if xmlns == attrstr::XMLNS_XML {
+			write!(out, " xml:{}=", name)?;
+		} else {
+			let prefix = format!("prosody-tmp-ns{}", *nsid);
+			*nsid = *nsid + 1;
+			write!(out, " xmlns:{}=", prefix)?;
+			attr_escape_value(out, xmlns)?;
+			write!(out, " {}:{}=", prefix, name)?;
+		}
 	} else {
 		write!(out, " {}=", name)?;
 	}
@@ -72,7 +77,7 @@ pub fn head_as_str<'a>(el: Ref<'a, tree::Element>) -> Result<String, fmt::Error>
 		attr_escape(&mut result, "xmlns", nsuri.as_str(), &mut nsid)?;
 	}
 	for (k, v) in el.attr.iter() {
-		attr_escape(&mut result, k, v, &mut nsid)?;
+		attr_escape(&mut result, k.as_ref(), v, &mut nsid)?;
 	}
 	result.write_str(">")?;
 	Ok(result)
@@ -156,7 +161,7 @@ impl<'a> FormatterState<'a> {
 			el.nsuri.clone()
 		};
 		for (k, v) in el.attr.iter() {
-			attr_escape(f, k, v, &mut nsid)?;
+			attr_escape(f, k.as_ref(), v, &mut nsid)?;
 		}
 		if el.len() == 0 {
 			return f.write_str("/>")
@@ -282,7 +287,7 @@ mod tests {
 
 	#[test]
 	fn format_escapes_attribute_values() {
-		let mut attr = HashMap::<String, String>::new();
+		let mut attr = HashMap::<attrstr::AttrName, String>::new();
 		attr.insert("moo".try_into().unwrap(), "&bar;<baz/>fnord\"'".try_into().unwrap());
 		let el = tree::ElementPtr::new_with_attr(None, "foo".try_into().unwrap(), Some(attr));
 		let fmt = Formatter{ indent: None, initial_level: 0 };
@@ -292,8 +297,8 @@ mod tests {
 
 	#[test]
 	fn format_handles_namespaces() {
-		let ns1 = Rc::new(CData::from_string("uri:foo".try_into().unwrap()).unwrap());
-		let ns2 = Rc::new(CData::from_string("uri:bar".try_into().unwrap()).unwrap());
+		let ns1: Rc<rxml::CData> = Rc::new("uri:foo".try_into().unwrap());
+		let ns2: Rc<rxml::CData> = Rc::new("uri:bar".try_into().unwrap());
 		let mut el = tree::ElementPtr::new_with_attr(
 			Some(ns1.clone()),
 			"foo".try_into().unwrap(),

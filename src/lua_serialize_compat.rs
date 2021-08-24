@@ -2,6 +2,7 @@ use mlua::prelude::*;
 use std::collections::HashMap;
 
 use crate::stanza::tree;
+use crate::stanza;
 use crate::lua_convert::*;
 
 pub trait Preserialize {
@@ -47,7 +48,7 @@ impl Preserialize for tree::Element {
 impl Deserialize for tree::ElementPtr {
 	fn deserialize<'l>(lua: &'l Lua, value: LuaValue<'l>) -> LuaResult<Self> {
 		let value = LuaTable::from_lua(value, lua)?;
-		let name = convert_ncname_from_lua(value.get::<_, LuaValue>("name")?)?;
+		let name = convert_name_from_lua(value.get::<_, LuaValue>("name")?)?;
 		let (nsuri, attr) = lua_table_to_attr(Some(value.get::<_, LuaTable>("attr")?))?;
 		let el = tree::ElementPtr::new_with_attr(
 			nsuri,
@@ -70,7 +71,7 @@ impl Deserialize for tree::ElementPtr {
 	}
 }
 
-impl Preserialize for HashMap<String, String> {
+impl Preserialize for HashMap<stanza::AttrName, String> {
 	fn preserialize<'l>(&self, lua: &'l Lua) -> LuaResult<LuaValue<'l>> {
 		self.clone().to_lua(lua)
 	}

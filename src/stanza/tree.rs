@@ -8,6 +8,8 @@ use std::error::Error;
 
 use rxml::CData;
 
+use super::attrstr::AttrName;
+
 #[derive(PartialEq, Debug)]
 pub enum InsertError {
 	NodeHasParent,
@@ -65,11 +67,11 @@ pub struct ElementPtr(Rc<RefCell<Element>>);
 struct WeakElementPtr(Weak<RefCell<Element>>);
 
 impl ElementPtr {
-	pub fn new(nsuri: Option<Rc<CData>>, name: rxml::NCName) -> ElementPtr {
+	pub fn new(nsuri: Option<Rc<CData>>, name: rxml::Name) -> ElementPtr {
 		ElementPtr::wrap(Element::raw_new(nsuri, name))
 	}
 
-	pub fn new_with_attr(nsuri: Option<Rc<CData>>, name: rxml::NCName, attr: Option<HashMap<String, String>>) -> ElementPtr {
+	pub fn new_with_attr(nsuri: Option<Rc<CData>>, name: rxml::Name, attr: Option<HashMap<AttrName, String>>) -> ElementPtr {
 		ElementPtr::wrap(Element::raw_new_with_attr(nsuri, name, attr))
 	}
 
@@ -161,8 +163,8 @@ impl<'a> Iterator for ChildElementIterator<'a> {
 
 pub struct Element {
 	pub nsuri: Option<Rc<CData>>,
-	pub localname: rxml::NCName,
-	pub attr: HashMap<String, String>,
+	pub localname: rxml::Name,
+	pub attr: HashMap<AttrName, String>,
 	// pub namespaces: HashMap<String, String>,
 	children: Children,
 	protected: bool,
@@ -285,11 +287,11 @@ impl ElementView<'_> {
 }
 
 impl Element {
-	fn raw_new(nsuri: Option<Rc<CData>>, name: rxml::NCName) -> Element {
+	fn raw_new(nsuri: Option<Rc<CData>>, name: rxml::Name) -> Element {
 		Element::raw_new_with_attr(nsuri, name, None)
 	}
 
-	fn raw_new_with_attr(nsuri: Option<Rc<CData>>, name: rxml::NCName, attr: Option<HashMap<String, String>>) -> Element {
+	fn raw_new_with_attr(nsuri: Option<Rc<CData>>, name: rxml::Name, attr: Option<HashMap<AttrName, String>>) -> Element {
 		Element{
 			nsuri: nsuri,
 			localname: name,
@@ -303,7 +305,7 @@ impl Element {
 		}
 	}
 
-	pub fn tag<'a>(&'a mut self, xmlns: Option<Rc<CData>>, name: rxml::NCName, attr: Option<HashMap<String, String>>) -> ElementPtr {
+	pub fn tag<'a>(&'a mut self, xmlns: Option<Rc<CData>>, name: rxml::Name, attr: Option<HashMap<AttrName, String>>) -> ElementPtr {
 		let result_ptr = ElementPtr::new_with_attr(xmlns, name, attr);
 		// if this node is protected, we need to inherit that.
 		result_ptr.borrow_mut().protected = self.protected;
@@ -615,7 +617,7 @@ mod tests {
 
 	#[test]
 	fn element_tag_inherits_nsuri_from_parent() {
-		let nsuri = Some(Rc::new(CData::from_string("uri:foobar".try_into().unwrap()).unwrap()));
+		let nsuri = Some(Rc::new("uri:foobar".try_into().unwrap()));
 		let el_ptr = ElementPtr::new(nsuri.clone(), "message".try_into().unwrap());
 		{
 			let body_ptr = el_ptr.borrow_mut().tag(None, "body".try_into().unwrap(), None);

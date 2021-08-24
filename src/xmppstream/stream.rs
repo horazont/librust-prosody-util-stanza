@@ -147,24 +147,18 @@ impl fmt::Debug for XMPPStream<'_> {
 	}
 }
 
-fn convert_attrs(mut rxmlattrs: HashMap<rxml::QName, rxml::CData>) -> HashMap<String, String> {
-	let mut out = HashMap::<String, String>::new();
+fn convert_attrs(mut rxmlattrs: HashMap<rxml::QName, rxml::CData>) -> HashMap<stanza::AttrName, String> {
+	let mut out = HashMap::<stanza::AttrName, String>::new();
 	for ((nsuri, localname), value) in rxmlattrs.drain() {
 		let key = match nsuri {
 			Some(nsuri) if *nsuri == rxml::XMLNS_XML => {
 				let mut s = String::with_capacity(localname.len() + 4);
 				s.push_str("xml:");
 				s.push_str(localname.as_str());
-				s
+				unsafe { stanza::AttrName::from_string_unsafe(s) }
 			},
-			Some(nsuri) => {
-				let mut s = String::with_capacity(nsuri.len() + localname.len() + 1);
-				s.push_str(nsuri.as_str());
-				s.push_str("\x01");
-				s.push_str(localname.as_str());
-				s
-			},
-			None => localname.as_string(),
+			Some(nsuri) => stanza::AttrName::compose(Some(&*nsuri), localname),
+			None => stanza::AttrName::local_only(localname),
 		};
 		out.insert(key, value.as_string());
 	}
@@ -236,7 +230,7 @@ impl<'x> XMPPStream<'x> {
 			},
 			(rxml::Event::StartElement(em, (nsuri, localname), mut attrs), false, _) => {
 				// stream header
-				if nsuri.is_none() || nsuri.unwrap().as_str() != *self.cfg.stream_namespace || localname != self.cfg.stream_localname {
+				if nsuri.is_none() || nsuri.unwrap().as_str() != *self.cfg.stream_namespace || localname != self.cfg.stream_localname.as_str() {
 					return Err(Error::InvalidStreamHeader);
 				}
 				let mut id: Option<rxml::CData> = None;
@@ -268,6 +262,7 @@ impl<'x> XMPPStream<'x> {
 				}
 				self.is_open = true;
 				account_bytes(&mut self.pending_bytes, em.len());
+				self.p.release_temporaries();
 				Ok(ProcResult::Event(Event::Opened{
 					lang: lang,
 					from: from,
@@ -281,7 +276,7 @@ impl<'x> XMPPStream<'x> {
 				let nsuri = match nsuri {
 					None => None,
 					Some(nsuri) => {
-						if **nsuri != *self.cfg.default_namespace || self.non_streamns_depth > 0 {
+						if **nsuri != self.cfg.default_namespace.as_str() || self.non_streamns_depth > 0 {
 							self.non_streamns_depth = match self.non_streamns_depth.checked_add(1) {
 								None => return Err(Error::ParserError(rxml::Error::RestrictedXml("nested too deep"))),
 								Some(v) => v,
@@ -296,13 +291,13 @@ impl<'x> XMPPStream<'x> {
 				match st_opt {
 					Some(st) => {
 						accum_bytes(&mut self.stanza_size, em.len())?;
-						st.tag(nsuri, localname, Some(converted_attrs));
+						st.tag(nsuri, localname.into(), Some(converted_attrs));
 						Ok(ProcResult::NeedMore)
 					},
 					None => {
 						let stanza = stanza::Stanza::new(
 							nsuri,
-							localname,
+							localname.into(),
 							Some(converted_attrs),
 						);
 						self.stanza = Some(stanza);
@@ -319,6 +314,8 @@ impl<'x> XMPPStream<'x> {
 				if cdata.split_ascii_whitespace().next().is_some() {
 					Err(Error::TextAtStreamLevel)
 				} else {
+					// make sure to not get excessive memory use from whitespace pings
+					self.p.release_temporaries();
 					Ok(ProcResult::NeedMore)
 				}
 			},
@@ -342,7 +339,7 @@ impl<'x> XMPPStream<'x> {
 
 					let swap = swap.unwrap();
 					let root = swap.root();
-					let ev = if root.localname == self.cfg.error_localname && root.nsuri.as_ref().and_then(|v| { Some(**v == self.cfg.stream_namespace.as_str()) }).unwrap_or(false) {
+					let ev = if root.localname == self.cfg.error_localname.as_str() && root.nsuri.as_ref().and_then(|v| { Some(**v == self.cfg.stream_namespace.as_str()) }).unwrap_or(false) {
 						drop(root);
 						ProcResult::Event(Event::Error(swap))
 					} else {
@@ -468,12 +465,12 @@ mod tests {
 				println!("stanza: {:?}", st);
 				let root = st.root();
 				assert_eq!(root.localname, "iq");
-				assert_eq!(root.attr.get(&"id".to_string()).unwrap(), "foobar2342");
-				assert_eq!(root.attr.get(&"from".to_string()).unwrap(), "juliet@capulet.example");
-				assert_eq!(root.attr.get(&"to".to_string()).unwrap(), "romeo@montague.example");
-				assert_eq!(root.attr.get(&"type".to_string()).unwrap(), "get");
+				assert_eq!(root.attr.get("id").unwrap(), "foobar2342");
+				assert_eq!(root.attr.get("from").unwrap(), "juliet@capulet.example");
+				assert_eq!(root.attr.get("to").unwrap(), "romeo@montague.example");
+				assert_eq!(root.attr.get("type").unwrap(), "get");
 				// we want the xmlns on the stanza to be None to avoid routing to other domains becoming problematic
-				assert!(root.attr.get(&"xmlns".to_string()).is_none());
+				assert!(root.attr.get("xmlns").is_none());
 
 				let q_ptr = root[0].as_element_ptr().unwrap();
 				let q = q_ptr.borrow();
@@ -497,15 +494,15 @@ mod tests {
 				println!("stanza: {:?}", st);
 				let root = st.root();
 				assert_eq!(root.localname, "message");
-				assert_eq!(root.attr.get(&"id".to_string()).unwrap(), "foobar2342");
-				assert_eq!(root.attr.get(&"from".to_string()).unwrap(), "juliet@capulet.example");
-				assert_eq!(root.attr.get(&"to".to_string()).unwrap(), "romeo@montague.example");
+				assert_eq!(root.attr.get("id").unwrap(), "foobar2342");
+				assert_eq!(root.attr.get("from").unwrap(), "juliet@capulet.example");
+				assert_eq!(root.attr.get("to").unwrap(), "romeo@montague.example");
 
 				let body_ptr = root[0].as_element_ptr().unwrap();
 				let body = body_ptr.borrow();
 				assert_eq!(body.localname, "body");
 				// we want the xmlns on the stanza and its direct same-namespace children to be None
-				assert!(body.attr.get(&"xmlns".to_string()).is_none());
+				assert!(body.attr.get("xmlns").is_none());
 				assert_eq!(body.get_text().unwrap(), "oh romeo I don’t know my lines!");
 			},
 			other => panic!("unexpected event: {:?}", other),
@@ -524,9 +521,9 @@ mod tests {
 				println!("stanza: {:?}", st);
 				let root = st.root();
 				assert_eq!(root.localname, "message");
-				assert_eq!(root.attr.get(&"id".to_string()).unwrap(), "foobar2342");
-				assert_eq!(root.attr.get(&"from".to_string()).unwrap(), "juliet@capulet.example");
-				assert_eq!(root.attr.get(&"to".to_string()).unwrap(), "romeo@montague.example");
+				assert_eq!(root.attr.get("id").unwrap(), "foobar2342");
+				assert_eq!(root.attr.get("from").unwrap(), "juliet@capulet.example");
+				assert_eq!(root.attr.get("to").unwrap(), "romeo@montague.example");
 
 				let fwd_ptr = root[0].as_element_ptr().unwrap();
 				let msg_ptr = fwd_ptr.borrow()[0].as_element_ptr().unwrap();
@@ -566,8 +563,8 @@ mod tests {
 				println!("stanza: {:?}", st);
 				let root = st.root();
 				assert_eq!(root.localname, "iq");
-				assert_eq!(root.attr.get(&"xml:lang".to_string()).unwrap(), "en");
-				assert!(root.attr.get(&"http://www.w3.org/XML/1998/namespace\x01lang".to_string()).is_none());
+				assert_eq!(root.attr.get("xml:lang").unwrap(), "en");
+				assert!(root.attr.get("http://www.w3.org/XML/1998/namespace\x01lang").is_none());
 			},
 			other => panic!("unexpected event: {:?}", other),
 		}

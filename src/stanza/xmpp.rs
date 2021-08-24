@@ -6,36 +6,37 @@ use std::collections::HashMap;
 use rxml::CData;
 
 use super::tree;
+use super::attrstr;
 
 pub const XMLNS_XMPP_STANZAS: &str = "urn:ietf:params:xml:ns:xmpp-stanzas";
 
 pub fn make_reply<'a>(el: Ref<'a, tree::Element>) -> tree::ElementPtr {
-	let mut attr = HashMap::new();
+	let mut attr: HashMap<attrstr::AttrName, String> = HashMap::new();
 	match el.attr.get("id") {
 		Some(v) => {
-			attr.insert("id".to_string(), v.clone());
+			attr.insert("id".try_into().unwrap(), v.clone());
 		},
 		_ => (),
 	};
 	match el.attr.get("from") {
 		Some(v) => {
-			attr.insert("to".to_string(), v.clone());
+			attr.insert("to".try_into().unwrap(), v.clone());
 		},
 		_ => (),
 	};
 	match el.attr.get("to") {
 		Some(v) => {
-			attr.insert("from".to_string(), v.clone());
+			attr.insert("from".try_into().unwrap(), v.clone());
 		},
 		_ => (),
 	};
 
 	if el.localname == "iq" {
-		attr.insert("type".to_string(), "result".to_string());
+		attr.insert("type".try_into().unwrap(), "result".to_string());
 	} else {
 		match el.attr.get("type") {
 			Some(v) => {
-				attr.insert("type".to_string(), v.clone());
+				attr.insert("type".try_into().unwrap(), v.clone());
 			},
 			_ => (),
 		};
@@ -120,7 +121,7 @@ impl ElementSelector {
 	}
 }
 
-type ErrorInfo = (String, rxml::NCName, Option<String>, Option<tree::ElementPtr>);
+type ErrorInfo = (String, rxml::Name, Option<String>, Option<tree::ElementPtr>);
 
 /// Extract ErrorInfo out of a stanza error.
 ///
@@ -128,7 +129,7 @@ type ErrorInfo = (String, rxml::NCName, Option<String>, Option<tree::ElementPtr>
 /// parent stanza. Use extract_error for that.
 pub fn extract_error_info<'a>(el: Ref<'a, tree::Element>) -> Option<ErrorInfo> {
 	let type_ = el.attr.get("type")?;
-	let mut condition: rxml::NCName = "undefined-condition".try_into().unwrap();
+	let mut condition: rxml::Name = "undefined-condition".try_into().unwrap();
 	let mut text: Option<String> = None;
 	let mut appdef: Option<tree::ElementPtr> = None;
 
@@ -178,20 +179,20 @@ pub fn make_error_reply<'a>(st: Ref<'a, tree::Element>, type_: String, condition
 	{
 		let err_ptr = {
 			let mut reply = reply_ptr.borrow_mut();
-			reply.attr.insert("type".to_string(), "error".to_string());
+			reply.attr.insert("type".try_into().unwrap(), "error".to_string());
 			reply.tag(None, "error".try_into().unwrap(), None)
 		};
 		let mut err = err_ptr.borrow_mut();
-		err.attr.insert("type".to_string(), type_);
+		err.attr.insert("type".try_into().unwrap(), type_);
 		match by {
-			Some(by) => { err.attr.insert("by".to_string(), by); },
+			Some(by) => { err.attr.insert("by".try_into().unwrap(), by); },
 			_ => (),
 		};
 
 		// this is safe because of the staticness of the string
 		let nsuri = Some(Rc::new(unsafe { CData::from_string_unchecked(XMLNS_XMPP_STANZAS.to_string()) }));
 
-		err.tag(nsuri.clone(), condition, None);
+		err.tag(nsuri.clone(), condition.into(), None);
 		match text {
 			Some(text) => {
 				let text_el_ptr = err.tag(nsuri.clone(), "text".try_into().unwrap(), None);
@@ -218,9 +219,9 @@ mod tests {
 	use super::*;
 	use std::convert::TryInto;
 
-	fn mkerrorattr(typename: String) -> HashMap<String, String> {
+	fn mkerrorattr(typename: String) -> HashMap<attrstr::AttrName, String> {
 		let mut result = HashMap::new();
-		result.insert("type".to_string(), typename);
+		result.insert("type".try_into().unwrap(), typename);
 		result
 	}
 

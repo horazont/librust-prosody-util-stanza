@@ -3,9 +3,10 @@ use std::borrow::Cow;
 use std::rc::Rc;
 use std::collections::HashMap;
 
-use rxml::{NCName, CData};
+use rxml::{NCName, Name, CData};
 
 use crate::validation;
+use crate::stanza::attrstr;
 
 pub fn strict_string_from_lua<'a>(v: &'a LuaValue) -> LuaResult<&'a [u8]> {
 	match &v {
@@ -36,11 +37,35 @@ pub fn convert_ncname_from_lua(v: LuaValue) -> LuaResult<NCName> {
 	}
 }
 
+pub fn convert_name_from_lua(v: LuaValue) -> LuaResult<Name> {
+	let raw = strict_string_from_lua(&v)?;
+	let s = match String::from_utf8(raw.to_vec()) {
+		Ok(s) => s,
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid utf-8: {}", e))),
+	};
+	match Name::from_string(s) {
+		Ok(s) => Ok(s),
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid name: {}", e))),
+	}
+}
+
 pub fn convert_attribute_name_from_lua(v: LuaValue) -> LuaResult<String> {
 	let raw = strict_string_from_lua(&v)?;
 	match validation::convert_xml_attribute_name(Cow::from(raw)) {
 		Ok(s) => Ok(s),
 		Err(e) => return Err(LuaError::RuntimeError(format!("invalid attribute name: {}", e))),
+	}
+}
+
+pub fn convert_attrname_from_lua(v: LuaValue) -> LuaResult<attrstr::AttrName> {
+	let raw = strict_string_from_lua(&v)?;
+	let s = match String::from_utf8(raw.to_vec()) {
+		Ok(s) => s,
+		Err(e) => return Err(LuaError::RuntimeError(format!("invalid utf-8: {}", e))),
+	};
+	match attrstr::AttrName::from_string(s) {
+		Ok(v) => Ok(v),
+		Err(e) => return Err(LuaError::RuntimeError(format!("attribute name not well-formed: {}", e))),
 	}
 }
 
@@ -103,13 +128,13 @@ pub fn lua_table_to_plain_attr(tbl: LuaTable) -> LuaResult<HashMap<String, Strin
 	Ok(result)
 }
 
-pub fn lua_table_to_attr(tbl: Option<LuaTable>) -> LuaResult<(Option<Rc<CData>>, Option<HashMap<String, String>>)> {
+pub fn lua_table_to_attr(tbl: Option<LuaTable>) -> LuaResult<(Option<Rc<CData>>, Option<HashMap<attrstr::AttrName, String>>)> {
 	if let Some(tbl) = tbl {
 		let mut result = HashMap::new();
 		let mut nsuri = None;
 		for pair in tbl.pairs::<LuaValue, LuaValue>() {
 			let (key, value) = pair?;
-			let key = convert_attribute_name_from_lua(key)?;
+			let key = convert_attrname_from_lua(key)?;
 			if key == "xmlns" {
 				nsuri = Some(Rc::new(convert_cdata_from_lua(value)?));
 			} else {

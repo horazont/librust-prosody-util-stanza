@@ -75,7 +75,7 @@ mod tests {
 		st.reset();
 
 		{
-			let child2_ptr = st.tag(Some(Rc::new(CData::from_string(TEST_XMLNS.try_into().unwrap()).unwrap())), "child2".try_into().unwrap(), None).unwrap();
+			let child2_ptr = st.tag(Some(Rc::new(TEST_XMLNS.try_into().unwrap())), "child2".try_into().unwrap(), None).unwrap();
 			let mut child2 = child2_ptr.borrow_mut();
 			child2.attr.insert("attr2".try_into().unwrap(), "value2".try_into().unwrap());
 		}
