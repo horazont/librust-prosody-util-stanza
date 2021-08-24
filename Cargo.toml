@@ -11,13 +11,10 @@ name = "rprosody"
 crate-type = ["cdylib"]
 
 [dependencies]
-mlua = { version = "0.6.0-beta.1", features = ["vendored", "module"] }
+mlua = { version = "^0.6", features = ["vendored", "module"] }
 bstr = { version = "0.2" }
 rxml = { path = "/home/horazont/Projects/rust/rxml/rxml", features = ["shared_ns"], default-features = false }
 smartstring = { version = "0.2" }
-
-[patch.crates-io]
-mlua = { path = "/home/horazont/Projects/rust/mlua" }
 
 [features]
 lua52 = ["mlua/lua52"]
